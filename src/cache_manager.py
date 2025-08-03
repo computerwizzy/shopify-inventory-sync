@@ -25,6 +25,10 @@ class CacheManager:
     
     def get(self, key: str) -> Optional[Any]:
         """Get cached value if not expired."""
+        # Ensure cache_store is initialized
+        if 'cache_store' not in st.session_state:
+            st.session_state.cache_store = {}
+            
         if key not in st.session_state.cache_store:
             return None
         
@@ -39,6 +43,10 @@ class CacheManager:
     
     def set(self, key: str, value: Any, ttl: int = None) -> None:
         """Cache a value with TTL (time to live)."""
+        # Ensure cache_store is initialized
+        if 'cache_store' not in st.session_state:
+            st.session_state.cache_store = {}
+            
         if ttl is None:
             ttl = self.default_ttl
         
@@ -69,6 +77,11 @@ class CacheManager:
     
     def invalidate(self, pattern: str = None) -> None:
         """Invalidate cache entries matching pattern."""
+        # Ensure cache_store is initialized
+        if 'cache_store' not in st.session_state:
+            st.session_state.cache_store = {}
+            return
+            
         if pattern is None:
             # Clear all cache
             st.session_state.cache_store = {}
@@ -84,6 +97,10 @@ class CacheManager:
     
     def get_cache_info(self) -> Dict:
         """Get cache statistics."""
+        # Ensure cache_store is initialized
+        if 'cache_store' not in st.session_state:
+            st.session_state.cache_store = {}
+            
         cache_store = st.session_state.cache_store
         total_entries = len(cache_store)
         expired_entries = 0
@@ -101,6 +118,11 @@ class CacheManager:
     
     def cleanup_expired(self) -> int:
         """Remove expired cache entries."""
+        # Ensure cache_store is initialized
+        if 'cache_store' not in st.session_state:
+            st.session_state.cache_store = {}
+            return 0
+            
         current_time = time.time()
         keys_to_remove = []
         

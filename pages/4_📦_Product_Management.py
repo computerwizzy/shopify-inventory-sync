@@ -39,6 +39,10 @@ if 'current_page' not in st.session_state:
 if 'products_per_page' not in st.session_state:
     st.session_state.products_per_page = 25
 
+# Initialize cache store for the cache manager
+if 'cache_store' not in st.session_state:
+    st.session_state.cache_store = {}
+
 def main():
     st.title("📦 Product & Inventory Management")
     st.markdown("Complete product and inventory management for your Shopify store.")
