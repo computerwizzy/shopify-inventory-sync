@@ -1,0 +1,31 @@
+{
+  "aitest": {
+    "type": "url",
+    "url": "https://docs.google.com/spreadsheets/d/e/2PACX-1vT7a7eHzkGvUbwMpyGPbxlQkLa1UsnTwvRfPMnLdzYkbgsdg03lHsXNKS7uh8aQHi7fiXZkBMGxjXVC/pub?gid=2064914079&single=true&output=csv",
+    "headers": null,
+    "auth": null,
+    "timeout": 30,
+    "created_at": "2025-07-21T18:34:23.051687",
+    "updated_at": "2025-07-21T18:34:23.051687"
+  },
+  "Xtreme force": {
+    "type": "url",
+    "url": "https://docs.google.com/spreadsheets/d/e/2PACX-1vSaPe9x784OxZYyCDiZvxyh6FdfDuvIvXhy3oxC3CwG_d6MzEkSypRq-ZIuz1od0r72ktEsVOLzg-Jo/pub?gid=1902733754&single=true&output=csv",
+    "headers": null,
+    "auth": null,
+    "timeout": 30,
+    "created_at": "2025-08-03T10:25:39.132712",
+    "updated_at": "2025-08-03T10:25:39.132712",
+    "column_mapping": {
+      "SKU": "Part_SKU",
+      "Quantity": "Available",
+      "Product Title": "Description",
+      "Price": "Price"
+    },
+    "selected_columns": [
+      "Part_SKU",
+      "Available",
+      "Price"
+    ]
+  }
+}

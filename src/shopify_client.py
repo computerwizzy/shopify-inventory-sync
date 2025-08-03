@@ -1,0 +1,416 @@
+import requests
+import time
+from typing import List, Dict, Optional
+import streamlit as st
+from urllib.parse import urljoin
+import os
+import logging
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from utils.api_resilience import (
+    ResilientAPIClient, 
+    create_resilient_session,
+    APIOverloadError,
+    RateLimitError
+)
+
+class ShopifyClient:
+    """Handles Shopify API integration for inventory management."""
+    
+    def __init__(self, store_url: str = None, access_token: str = None, api_version: str = "2024-01"):
+        """
+        Initialize Shopify client.
+        
+        Args:
+            store_url: Shopify store URL (e.g., 'your-store.myshopify.com')
+            access_token: Shopify private app access token
+            api_version: Shopify API version
+        """
+        self.store_url = store_url or os.getenv('SHOPIFY_STORE_URL')
+        self.access_token = access_token or os.getenv('SHOPIFY_ACCESS_TOKEN')
+        self.api_version = api_version or os.getenv('SHOPIFY_API_VERSION', '2024-01')
+        
+        if not self.store_url or not self.access_token:
+            raise ValueError("Shopify store URL and access token are required")
+        
+        # Ensure store URL format
+        if not self.store_url.startswith('https://'):
+            self.store_url = f"https://{self.store_url}"
+        if not self.store_url.endswith('.myshopify.com'):
+            if not self.store_url.endswith('.myshopify.com/'):
+                self.store_url = f"{self.store_url}.myshopify.com"
+        
+        self.base_url = f"{self.store_url}/admin/api/{self.api_version}/"
+        
+        # Setup logging
+        self.logger = logging.getLogger(f'{__name__}.ShopifyClient')
+        
+        # Request tracking for rate limiting
+        self.last_request_time = 0
+        self.min_request_interval = 0.5
+        
+        # Statistics tracking
+        self._requests_made = 0
+        self._failures = 0
+        self._rate_limits = 0
+        
+        # SKU lookup cache for performance optimization
+        self._sku_to_product_cache = {}
+    
+    def _make_request(self, method: str, endpoint: str, params: Dict = None, json_data: Dict = None) -> Dict:
+        """
+        Make request to Shopify API with basic retry logic.
+        
+        Args:
+            method: HTTP method
+            endpoint: API endpoint
+            params: URL parameters
+            json_data: JSON payload
+            
+        Returns:
+            Dict: API response
+            
+        Raises:
+            Exception: If request fails after all retries
+        """
+        url = urljoin(self.base_url, endpoint)
+        
+        # Simple rate limiting
+        current_time = time.time()
+        if current_time - self.last_request_time < self.min_request_interval:
+            time.sleep(self.min_request_interval - (current_time - self.last_request_time))
+        
+        headers = {
+            'X-Shopify-Access-Token': self.access_token,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Make direct request
+                response = requests.request(
+                    method=method,
+                    url=url,
+                    params=params,
+                    json=json_data,
+                    headers=headers,
+                    timeout=30
+                )
+                
+                self.last_request_time = time.time()
+                self._requests_made += 1
+                
+                # Handle rate limiting
+                if response.status_code == 429:
+                    self._rate_limits += 1
+                    retry_after = int(response.headers.get('Retry-After', 2))
+                    if attempt < max_retries - 1:
+                        self.logger.warning(f"Rate limited, waiting {retry_after} seconds...")
+                        time.sleep(retry_after)
+                        continue
+                    else:
+                        raise Exception(f"Rate limited after {max_retries} attempts")
+                
+                # Check for success
+                response.raise_for_status()
+                
+                # Parse JSON response
+                if response.content:
+                    return response.json()
+                else:
+                    return {}
+                    
+            except requests.exceptions.RequestException as e:
+                self._failures += 1
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff
+                    self.logger.warning(f"Request failed (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    self.logger.error(f"Shopify API request failed after {max_retries} attempts: {str(e)}")
+                    raise Exception(f"Shopify API request failed: {str(e)}")
+            
+            except Exception as e:
+                self._failures += 1
+                self.logger.error(f"Unexpected error in Shopify API request: {str(e)}")
+                raise Exception(f"Shopify API unexpected error: {str(e)}")
+        
+        raise Exception("Maximum retry attempts exceeded")
+    
+    def test_connection(self) -> bool:
+        """
+        Test connection to Shopify API.
+        
+        Returns:
+            bool: True if connection successful
+        """
+        try:
+            response = self._make_request('GET', 'shop.json')
+            return 'shop' in response
+        except Exception:
+            return False
+    
+    def get_shop_info(self) -> Dict:
+        """
+        Get shop information.
+        
+        Returns:
+            Dict: Shop information
+        """
+        response = self._make_request('GET', 'shop.json')
+        return response.get('shop', {})
+    
+    def get_all_products(self, limit: int = 250) -> List[Dict]:
+        """
+        Get all products from Shopify store.
+        
+        Args:
+            limit: Number of products per page (max 250)
+            
+        Returns:
+            List[Dict]: All products with variants
+        """
+        all_products = []
+        params = {
+            'limit': min(limit, 250),
+            'fields': 'id,title,handle,variants'
+        }
+        
+        # Get first page
+        response = self._make_request('GET', 'products.json', params=params)
+        products = response.get('products', [])
+        all_products.extend(products)
+        
+        # Get remaining pages using pagination
+        while len(products) == params['limit']:
+            # Get next page using the last product's ID
+            params['since_id'] = products[-1]['id']
+            response = self._make_request('GET', 'products.json', params=params)
+            products = response.get('products', [])
+            all_products.extend(products)
+        
+        return all_products
+    
+    def get_product_variants(self, product_id: int) -> List[Dict]:
+        """
+        Get all variants for a specific product.
+        
+        Args:
+            product_id: Shopify product ID
+            
+        Returns:
+            List[Dict]: Product variants
+        """
+        response = self._make_request('GET', f'products/{product_id}/variants.json')
+        return response.get('variants', [])
+    
+    def get_inventory_levels(self, inventory_item_ids: List[int]) -> List[Dict]:
+        """
+        Get inventory levels for specific inventory items.
+        
+        Args:
+            inventory_item_ids: List of inventory item IDs
+            
+        Returns:
+            List[Dict]: Inventory levels
+        """
+        if not inventory_item_ids:
+            return []
+        
+        # Shopify limits to 50 inventory item IDs per request
+        all_levels = []
+        chunk_size = 50
+        
+        for i in range(0, len(inventory_item_ids), chunk_size):
+            chunk_ids = inventory_item_ids[i:i + chunk_size]
+            params = {
+                'inventory_item_ids': ','.join(map(str, chunk_ids))
+            }
+            
+            response = self._make_request('GET', 'inventory_levels.json', params=params)
+            levels = response.get('inventory_levels', [])
+            all_levels.extend(levels)
+        
+        return all_levels
+    
+    def update_inventory(self, variant_id: int, quantity: int, location_id: int = None) -> Dict:
+        """
+        Update inventory quantity for a variant.
+        
+        Args:
+            variant_id: Shopify variant ID
+            quantity: New quantity
+            location_id: Location ID (optional, uses primary location if not provided)
+            
+        Returns:
+            Dict: Update response
+        """
+        # Get variant info to find inventory item ID
+        variant_response = self._make_request('GET', f'variants/{variant_id}.json')
+        variant = variant_response.get('variant', {})
+        inventory_item_id = variant.get('inventory_item_id')
+        
+        if not inventory_item_id:
+            raise Exception(f"No inventory item found for variant {variant_id}")
+        
+        # Get location ID if not provided
+        if not location_id:
+            location_id = self._get_primary_location_id()
+        
+        # Update inventory level
+        json_data = {
+            'location_id': location_id,
+            'inventory_item_id': inventory_item_id,
+            'available': quantity
+        }
+        
+        response = self._make_request('POST', 'inventory_levels/set.json', json_data=json_data)
+        return response.get('inventory_level', {})
+    
+    def bulk_update_inventory(self, updates: List[Dict], location_id: int = None) -> List[Dict]:
+        """
+        Update multiple inventory items in batch.
+        
+        Args:
+            updates: List of update dictionaries with 'variant_id' and 'quantity'
+            location_id: Location ID (optional)
+            
+        Returns:
+            List[Dict]: Update results
+        """
+        if not location_id:
+            location_id = self._get_primary_location_id()
+        
+        results = []
+        
+        for update in updates:
+            try:
+                result = self.update_inventory(
+                    update['variant_id'], 
+                    update['quantity'], 
+                    location_id
+                )
+                results.append({
+                    'variant_id': update['variant_id'],
+                    'success': True,
+                    'result': result
+                })
+            except Exception as e:
+                results.append({
+                    'variant_id': update['variant_id'],
+                    'success': False,
+                    'error': str(e)
+                })
+        
+        return results
+    
+    def _get_primary_location_id(self) -> int:
+        """
+        Get the primary location ID.
+        
+        Returns:
+            int: Primary location ID
+        """
+        response = self._make_request('GET', 'locations.json')
+        locations = response.get('locations', [])
+        
+        # Find primary location
+        for location in locations:
+            if location.get('primary', False):
+                return location['id']
+        
+        # If no primary location, return first location
+        if locations:
+            return locations[0]['id']
+        
+        raise Exception("No locations found in store")
+    
+    def search_products(self, query: str, limit: int = 50) -> List[Dict]:
+        """
+        Search products by title, SKU, or other fields.
+        
+        Args:
+            query: Search query
+            limit: Maximum number of results
+            
+        Returns:
+            List[Dict]: Matching products
+        """
+        params = {
+            'limit': min(limit, 250),
+            'title': query,
+            'fields': 'id,title,handle,variants'
+        }
+        
+        response = self._make_request('GET', 'products.json', params=params)
+        return response.get('products', [])
+    
+    def get_product_by_sku(self, sku: str) -> Optional[Dict]:
+        """
+        Find product variant by SKU with caching optimization.
+        
+        Args:
+            sku: Product SKU
+            
+        Returns:
+            Dict or None: Product and variant info
+        """
+        # Check cache first
+        if sku in self._sku_to_product_cache:
+            return self._sku_to_product_cache[sku]
+        
+        # Build cache if empty (only do this once)
+        if not self._sku_to_product_cache:
+            self._build_sku_cache()
+        
+        return self._sku_to_product_cache.get(sku)
+    
+    def _build_sku_cache(self):
+        """Build SKU to product mapping cache for efficient lookups."""
+        try:
+            all_products = self.get_all_products()
+            
+            for product in all_products:
+                if 'variants' in product:
+                    for variant in product['variants']:
+                        sku = variant.get('sku')
+                        if sku:
+                            self._sku_to_product_cache[sku] = {
+                                'product': product,
+                                'variant': variant
+                            }
+        except Exception as e:
+            self.logger.error(f"Failed to build SKU cache: {str(e)}")
+            # Don't let cache building failure break the operation
+            pass
+    
+    def get_api_stats(self) -> Dict:
+        """
+        Get API client statistics for monitoring.
+        
+        Returns:
+            Dict: API client statistics
+        """
+        return {
+            'requests_made': getattr(self, '_requests_made', 0),
+            'failures': getattr(self, '_failures', 0),
+            'rate_limits': getattr(self, '_rate_limits', 0),
+            'last_request_time': self.last_request_time,
+            'base_url': self.base_url,
+            'circuit_breaker_state': 'CLOSED'
+        }
+    
+    def reset_resilience(self):
+        """Reset all resilience patterns (circuit breaker, rate limiter)."""
+        self._requests_made = 0
+        self._failures = 0
+        self._rate_limits = 0
+        self.logger.info("Shopify API client statistics reset")
+    
+    def close(self):
+        """Close any resources."""
+        pass
