@@ -14,12 +14,11 @@
     "headers": null,
     "auth": null,
     "timeout": 30,
-    "created_at": "2025-08-03T10:25:39.132712",
-    "updated_at": "2025-08-03T10:25:39.132712",
+    "created_at": "2025-08-03T11:21:29.645478",
+    "updated_at": "2025-08-03T11:21:29.645478",
     "column_mapping": {
       "SKU": "Part_SKU",
       "Quantity": "Available",
-      "Product Title": "Description",
       "Price": "Price"
     },
     "selected_columns": [
