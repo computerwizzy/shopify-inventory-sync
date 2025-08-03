@@ -170,11 +170,15 @@ class SyncScheduler:
             if df.empty:
                 raise Exception("No data found in feed")
             
+            # Log original columns for debugging
+            self.logger.info(f"Original columns in feed data: {list(df.columns)}")
+            
             # Filter to selected columns if configured
             if feed_config.get('selected_columns'):
                 processor = FileProcessor()
+                original_column_count = len(df.columns)
                 df = processor.filter_selected_columns(df, feed_config['selected_columns'])
-                self.logger.info(f"Filtered to {len(df.columns)} selected columns: {list(df.columns)}")
+                self.logger.info(f"Filtered from {original_column_count} to {len(df.columns)} selected columns: {list(df.columns)}")
             
             # Apply column mapping from feed configuration or job data
             column_mapping = {}
@@ -190,9 +194,20 @@ class SyncScheduler:
                 self.logger.info(f"Applied job-specific column mapping override: {job_data['column_mapping']}")
             
             if column_mapping:
+                # Check if mapped columns exist in the dataframe
+                missing_columns = []
+                for field, source_column in column_mapping.items():
+                    if source_column not in df.columns:
+                        missing_columns.append(source_column)
+                
+                if missing_columns:
+                    self.logger.error(f"Column mapping error - Missing columns in data: {missing_columns}")
+                    self.logger.error(f"Available columns: {list(df.columns)}")
+                    raise Exception(f"Column mapping failed - missing columns: {', '.join(missing_columns)}")
+                
                 mapper = ColumnMapper(df.columns.tolist())
                 df = mapper.get_mapped_data(df, column_mapping)
-                self.logger.info(f"Applied column mapping to {len(df)} rows")
+                self.logger.info(f"Applied column mapping to {len(df)} rows, result columns: {list(df.columns)}")
             
             # Validate required columns
             if 'SKU' not in df.columns or 'Quantity' not in df.columns:

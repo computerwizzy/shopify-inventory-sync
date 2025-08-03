@@ -1,0 +1,22 @@
+[
+  {
+    "job_id": "Xtreme Force collection",
+    "start_time": "2025-08-03 16:42:08.380453",
+    "success": false,
+    "error": "'Part_SKU'",
+    "records_processed": 643,
+    "records_synced": 0,
+    "end_time": "2025-08-03 16:42:18.280693",
+    "duration": 9.90024
+  },
+  {
+    "job_id": "Xtreme Force collection",
+    "start_time": "2025-08-03 16:43:16.242812",
+    "success": false,
+    "error": "'Part_SKU'",
+    "records_processed": 643,
+    "records_synced": 0,
+    "end_time": "2025-08-03 16:43:18.496500",
+    "duration": 2.253688
+  }
+]

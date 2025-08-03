@@ -1,0 +1,43 @@
+{
+  "job_id": "Xtreme Force collection",
+  "feed_config_name": "Xtreme force",
+  "column_mapping": {
+    "SKU": "Part_SKU",
+    "Quantity": "Available",
+    "Price": "Price"
+  },
+  "sync_fields": {
+    "inventory_quantity": true,
+    "product_title": false,
+    "product_description": false,
+    "product_vendor": false,
+    "product_type": false,
+    "variant_price": false,
+    "compare_at_price": false,
+    "variant_weight": false,
+    "variant_sku": false,
+    "product_status": false,
+    "track_inventory": false
+  },
+  "sync_options": {
+    "only_update_existing": true,
+    "skip_zero_inventory": false,
+    "batch_size": 50,
+    "update_frequency": "All records"
+  },
+  "collection_ids": [
+    472570790123
+  ],
+  "schedule_type": "interval",
+  "schedule_config": {
+    "weeks": 1,
+    "start_date": "2025-08-03 16:40:00"
+  },
+  "created_at": "2025-08-03T16:41:44.597377",
+  "last_run": "2025-08-03T16:43:16.242812",
+  "last_success": null,
+  "last_error": "'Part_SKU'",
+  "run_count": 2,
+  "success_count": 0,
+  "error_count": 2
+}
