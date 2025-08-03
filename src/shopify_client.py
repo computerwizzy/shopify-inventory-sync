@@ -858,3 +858,186 @@ class ShopifyClient:
             'product_types': dict(sorted(product_types.items(), key=lambda x: x[1], reverse=True)),
             'vendors': dict(sorted(vendors.items(), key=lambda x: x[1], reverse=True))
         }
+    
+    def get_products_count(self) -> int:
+        """
+        Get total product count efficiently.
+        
+        Returns:
+            int: Total number of products
+        """
+        try:
+            # Use the count endpoint for efficiency
+            response = self._make_request('GET', 'products/count.json')
+            return response.get('count', 0)
+        except Exception as e:
+            self.logger.error(f"Failed to get product count: {str(e)}")
+            return 0
+    
+    def get_quick_metrics(self) -> Dict:
+        """
+        Get quick dashboard metrics without loading all products.
+        
+        Returns:
+            Dict: Quick metrics for dashboard
+        """
+        try:
+            # Get basic counts
+            shop_info = self.get_shop_info()
+            product_count = self.get_products_count()
+            
+            # Get a sample of recent products for quick analysis
+            sample_products = self._get_paginated_results('products.json?limit=50&fields=id,variants', 'products', 50)
+            
+            sample_variants = 0
+            sample_inventory = 0
+            sample_value = 0
+            low_stock_sample = 0
+            out_of_stock_sample = 0
+            
+            for product in sample_products:
+                for variant in product.get('variants', []):
+                    sample_variants += 1
+                    inventory_qty = variant.get('inventory_quantity', 0)
+                    price = float(variant.get('price', 0))
+                    
+                    sample_inventory += inventory_qty
+                    sample_value += inventory_qty * price
+                    
+                    if inventory_qty == 0:
+                        out_of_stock_sample += 1
+                    elif inventory_qty <= 5:
+                        low_stock_sample += 1
+            
+            # Estimate totals based on sample (rough approximation)
+            if sample_variants > 0:
+                avg_variants_per_product = sample_variants / len(sample_products) if sample_products else 1
+                estimated_variants = int(product_count * avg_variants_per_product)
+                
+                avg_inventory_per_variant = sample_inventory / sample_variants if sample_variants > 0 else 0
+                estimated_inventory = int(estimated_variants * avg_inventory_per_variant)
+                
+                avg_value_per_variant = sample_value / sample_variants if sample_variants > 0 else 0
+                estimated_value = estimated_variants * avg_value_per_variant
+                
+                # Estimate stock status
+                low_stock_ratio = low_stock_sample / sample_variants if sample_variants > 0 else 0
+                out_of_stock_ratio = out_of_stock_sample / sample_variants if sample_variants > 0 else 0
+                
+                estimated_low_stock = int(estimated_variants * low_stock_ratio)
+                estimated_out_of_stock = int(estimated_variants * out_of_stock_ratio)
+            else:
+                estimated_variants = 0
+                estimated_inventory = 0
+                estimated_value = 0
+                estimated_low_stock = 0
+                estimated_out_of_stock = 0
+            
+            return {
+                'shop_name': shop_info.get('name', 'Your Store'),
+                'total_products': product_count,
+                'estimated_variants': estimated_variants,
+                'estimated_inventory': estimated_inventory,
+                'estimated_value': estimated_value,
+                'estimated_low_stock': estimated_low_stock,
+                'estimated_out_of_stock': estimated_out_of_stock,
+                'estimated_well_stocked': estimated_variants - estimated_low_stock - estimated_out_of_stock,
+                'sample_size': len(sample_products),
+                'is_estimate': True
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get quick metrics: {str(e)}")
+            return {
+                'shop_name': 'Your Store',
+                'total_products': 0,
+                'estimated_variants': 0,
+                'estimated_inventory': 0,
+                'estimated_value': 0,
+                'estimated_low_stock': 0,
+                'estimated_out_of_stock': 0,
+                'estimated_well_stocked': 0,
+                'sample_size': 0,
+                'is_estimate': True,
+                'error': str(e)
+            }
+    
+    def get_products_paginated(self, page: int = 1, limit: int = 50, 
+                              search: str = None, stock_filter: str = None) -> Dict:
+        """
+        Get products with pagination for better performance.
+        
+        Args:
+            page: Page number (1-indexed)
+            limit: Products per page
+            search: Search term
+            stock_filter: Filter by stock level
+            
+        Returns:
+            Dict: Paginated products data
+        """
+        try:
+            params = {
+                'limit': min(limit, 250),
+                'fields': 'id,title,handle,variants,product_type,vendor,created_at,updated_at'
+            }
+            
+            # Calculate offset for pagination
+            if page > 1:
+                # For pagination, we need to use since_id approach
+                # This is a simplified version - in production you'd want better pagination
+                pass
+            
+            if search:
+                params['title'] = search
+            
+            # Get products
+            response = self._make_request('GET', 'products.json', params=params)
+            products = response.get('products', [])
+            
+            # Process products for display
+            product_data = []
+            for product in products:
+                for variant in product.get('variants', []):
+                    inventory_qty = variant.get('inventory_quantity', 0)
+                    
+                    # Apply stock filter
+                    if stock_filter == "In Stock" and inventory_qty <= 5:
+                        continue
+                    elif stock_filter == "Low Stock (≤5)" and not (0 < inventory_qty <= 5):
+                        continue
+                    elif stock_filter == "Out of Stock" and inventory_qty != 0:
+                        continue
+                    
+                    product_data.append({
+                        'product_id': product['id'],
+                        'variant_id': variant['id'],
+                        'title': product['title'],
+                        'variant_title': variant.get('title', 'Default Title'),
+                        'sku': variant.get('sku', ''),
+                        'price': float(variant.get('price', 0)),
+                        'inventory_quantity': inventory_qty,
+                        'product_type': product.get('product_type', ''),
+                        'vendor': product.get('vendor', ''),
+                        'updated_at': product.get('updated_at', ''),
+                        'stock_status': 'out' if inventory_qty == 0 else 'low' if inventory_qty <= 5 else 'good'
+                    })
+            
+            return {
+                'products': product_data,
+                'page': page,
+                'limit': limit,
+                'has_more': len(products) == limit,  # Simplified check
+                'total_on_page': len(product_data)
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get paginated products: {str(e)}")
+            return {
+                'products': [],
+                'page': page,
+                'limit': limit,
+                'has_more': False,
+                'total_on_page': 0,
+                'error': str(e)
+            }

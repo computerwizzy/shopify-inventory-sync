@@ -7,9 +7,11 @@ import json
 import os
 import sys
 from typing import Dict, List, Optional
+import time
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.shopify_client import ShopifyClient
+from src.cache_manager import cache_manager
 from utils.config import Config
 
 st.set_page_config(
@@ -30,6 +32,12 @@ if 'shopify_client' not in st.session_state:
     except Exception as e:
         st.error(f"Failed to initialize Shopify Client: {e}")
         st.stop()
+
+# Initialize pagination state
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = 1
+if 'products_per_page' not in st.session_state:
+    st.session_state.products_per_page = 25
 
 def main():
     st.title("📦 Product & Inventory Management")
@@ -64,316 +72,391 @@ def main():
         settings_tab()
 
 def dashboard_tab():
-    """Main dashboard with key metrics and quick actions."""
+    """Fast-loading dashboard with key metrics and quick actions."""
     st.header("📊 Inventory Dashboard")
     
-    try:
-        with st.spinner("Loading dashboard data..."):
-            # Get shop info
-            shop_info = st.session_state.shopify_client.get_shop_info()
-            
-            # Get products with inventory data
-            products = st.session_state.shopify_client.get_all_products()
-            
-            if not products:
-                st.warning("No products found in your store.")
-                return
-            
-            # Process inventory data
-            inventory_data = []
-            total_value = 0
-            low_stock_count = 0
-            out_of_stock_count = 0
-            
-            for product in products:
-                for variant in product.get('variants', []):
-                    inventory_qty = variant.get('inventory_quantity', 0)
-                    price = float(variant.get('price', 0))
-                    cost = float(variant.get('cost', 0)) if variant.get('cost') else price * 0.6  # Estimate if no cost
-                    
-                    inventory_data.append({
-                        'product_id': product['id'],
-                        'variant_id': variant['id'],
-                        'title': product['title'],
-                        'variant_title': variant.get('title', ''),
-                        'sku': variant.get('sku', ''),
-                        'price': price,
-                        'cost': cost,
-                        'inventory_quantity': inventory_qty,
-                        'inventory_value': inventory_qty * cost
-                    })
-                    
-                    total_value += inventory_qty * cost
-                    
-                    if inventory_qty == 0:
-                        out_of_stock_count += 1
-                    elif inventory_qty <= 5:  # Low stock threshold
-                        low_stock_count += 1
-            
-            df = pd.DataFrame(inventory_data)
-            
-            # Key metrics
-            col1, col2, col3, col4, col5 = st.columns(5)
-            
-            with col1:
-                st.metric(
-                    "Total Products", 
-                    len(products),
-                    help="Total number of products in your store"
-                )
-            
-            with col2:
-                st.metric(
-                    "Total Variants", 
-                    len(df),
-                    help="Total number of product variants"
-                )
-            
-            with col3:
-                total_inventory = df['inventory_quantity'].sum()
-                st.metric(
-                    "Total Inventory", 
-                    f"{total_inventory:,}",
-                    help="Total inventory quantity across all variants"
-                )
-            
-            with col4:
-                st.metric(
-                    "Inventory Value", 
-                    f"${total_value:,.2f}",
-                    help="Total value of inventory at cost"
-                )
-            
-            with col5:
-                st.metric(
-                    "Shop Name", 
-                    shop_info.get('name', 'Unknown'),
-                    help="Your Shopify store name"
-                )
-            
-            # Alert metrics
-            st.markdown("---")
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.metric(
-                    "⚠️ Low Stock Items", 
-                    low_stock_count,
-                    help="Items with 5 or fewer units in stock"
-                )
-            
-            with col2:
-                st.metric(
-                    "🚫 Out of Stock", 
-                    out_of_stock_count,
-                    help="Items with zero inventory"
-                )
-            
-            with col3:
-                in_stock_count = len(df) - out_of_stock_count - low_stock_count
-                st.metric(
-                    "✅ Well Stocked", 
-                    in_stock_count,
-                    help="Items with healthy stock levels"
-                )
-            
-            # Quick actions
-            st.markdown("---")
-            st.subheader("🚀 Quick Actions")
-            
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                if st.button("📤 Export Inventory", help="Export current inventory to CSV"):
-                    csv = df.to_csv(index=False)
-                    st.download_button(
-                        label="⬇️ Download CSV",
-                        data=csv,
-                        file_name=f"inventory_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv"
-                    )
-            
-            with col2:
-                if st.button("🔄 Sync Inventory", help="Sync inventory from connected feeds"):
-                    st.info("Navigate to Scheduled Sync to run inventory synchronization")
-            
-            with col3:
-                if st.button("📊 View Analytics", help="Open detailed analytics dashboard"):
-                    st.switch_page("pages/4_📦_Product_Management.py")  # Switch to analytics tab
-            
-            with col4:
-                if st.button("⚙️ Bulk Update", help="Perform bulk operations on products"):
-                    st.info("Use the Bulk Operations tab for mass updates")
-            
-            # Recent activity or top products
-            if len(df) > 0:
-                st.markdown("---")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.subheader("📈 Top Products by Value")
-                    top_products = df.nlargest(10, 'inventory_value')[['title', 'sku', 'inventory_quantity', 'inventory_value']]
-                    st.dataframe(top_products, use_container_width=True, hide_index=True)
-                
-                with col2:
-                    st.subheader("⚠️ Low Stock Alert")
-                    low_stock_items = df[df['inventory_quantity'] <= 5][['title', 'variant_title', 'sku', 'inventory_quantity']]
-                    if not low_stock_items.empty:
-                        st.dataframe(low_stock_items, use_container_width=True, hide_index=True)
-                    else:
-                        st.success("✅ No low stock items!")
-            
-    except Exception as e:
-        st.error(f"❌ Error loading dashboard: {str(e)}")
-
-def browse_products_tab():
-    """Browse and search products with advanced filtering."""
-    st.header("🔍 Browse Products")
+    # Cache control buttons
+    col1, col2, col3 = st.columns([1, 1, 4])
+    with col1:
+        if st.button("🔄 Refresh Data", help="Clear cache and reload data"):
+            cache_manager.invalidate("quick_metrics")
+            cache_manager.invalidate("low_stock")
+            st.rerun()
+    
+    with col2:
+        cache_info = cache_manager.get_cache_info()
+        st.caption(f"Cache: {cache_info['active_entries']} entries")
     
     try:
+        # Use cached quick metrics for fast loading
+        with st.spinner("Loading dashboard metrics..."):
+            metrics = cache_manager.cached_call(
+                st.session_state.shopify_client.get_quick_metrics,
+                "quick_metrics",
+                ttl=300  # 5 minutes cache
+            )
+        
+        if 'error' in metrics:
+            st.error(f"❌ Error loading metrics: {metrics['error']}")
+            return
+        
+        # Display performance indicator
+        if metrics.get('is_estimate'):
+            st.info(f"📊 **Quick Dashboard** - Showing estimates based on {metrics['sample_size']} recent products. Use 'Browse Products' for detailed view.")
+        
+        # Key metrics row
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        with col1:
+            st.metric(
+                "Total Products", 
+                f"{metrics['total_products']:,}",
+                help="Total number of products in your store"
+            )
+        
+        with col2:
+            st.metric(
+                "Total Variants", 
+                f"{metrics['estimated_variants']:,}",
+                help="Estimated total number of product variants"
+            )
+        
+        with col3:
+            st.metric(
+                "Total Inventory", 
+                f"{metrics['estimated_inventory']:,}",
+                help="Estimated total inventory quantity"
+            )
+        
+        with col4:
+            st.metric(
+                "Inventory Value", 
+                f"${metrics['estimated_value']:,.2f}",
+                help="Estimated total inventory value"
+            )
+        
+        with col5:
+            st.metric(
+                "Store", 
+                metrics['shop_name'],
+                help="Your Shopify store name"
+            )
+        
+        # Stock status alerts
+        st.markdown("---")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                "⚠️ Low Stock", 
+                f"{metrics['estimated_low_stock']:,}",
+                help="Estimated items with 5 or fewer units in stock"
+            )
+        
+        with col2:
+            st.metric(
+                "🚫 Out of Stock", 
+                f"{metrics['estimated_out_of_stock']:,}",
+                help="Estimated items with zero inventory"
+            )
+        
+        with col3:
+            st.metric(
+                "✅ Well Stocked", 
+                f"{metrics['estimated_well_stocked']:,}",
+                help="Estimated items with healthy stock levels"
+            )
+        
+        # Quick actions
+        st.markdown("---")
+        st.subheader("🚀 Quick Actions")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            if st.button("🔍 Browse Products", type="primary", help="Browse and manage your products"):
+                # Switch to browse tab
+                pass
+        
+        with col2:
+            if st.button("📤 Export Sample", help="Export sample data for analysis"):
+                # Create a sample export
+                st.info("Use 'Browse Products' tab to export full inventory data")
+        
+        with col3:
+            if st.button("🔄 Sync Now", help="Run inventory synchronization"):
+                st.info("Navigate to Scheduled Sync to run inventory synchronization")
+        
+        with col4:
+            if st.button("⚙️ Bulk Operations", help="Perform bulk operations on products"):
+                st.info("Use the Bulk Operations tab for mass updates")
+        
+        # Quick insights
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("📊 Quick Insights")
+            if metrics['estimated_variants'] > 0:
+                out_of_stock_pct = (metrics['estimated_out_of_stock'] / metrics['estimated_variants']) * 100
+                low_stock_pct = (metrics['estimated_low_stock'] / metrics['estimated_variants']) * 100
+                
+                st.write(f"**Out of Stock:** {out_of_stock_pct:.1f}% of variants")
+                st.write(f"**Low Stock:** {low_stock_pct:.1f}% of variants")
+                
+                if out_of_stock_pct > 20:
+                    st.warning("⚠️ High percentage of out-of-stock items!")
+                elif out_of_stock_pct > 10:
+                    st.info("💡 Consider restocking out-of-stock items")
+                else:
+                    st.success("✅ Good stock availability")
+        
+        with col2:
+            st.subheader("⚡ Performance Tips")
+            st.markdown("""
+            - **Browse Products**: View paginated product list
+            - **Use Filters**: Filter by stock status to focus on issues  
+            - **Bulk Operations**: Update multiple products at once
+            - **Scheduled Sync**: Automate inventory updates
+            - **Cache Refresh**: Click refresh to update metrics
+            """)
+        
+        # Load and display critical alerts asynchronously
+        if st.button("🔍 Show Critical Alerts", help="Load detailed low stock and out of stock items"):
+            show_critical_alerts()
+    
+    except Exception as e:
+        st.error(f"❌ Error loading dashboard: {str(e)}")
+        st.info("💡 Try refreshing the page or check your Shopify connection.")
+
+def show_critical_alerts():
+    """Show critical stock alerts with caching."""
+    try:
+        with st.spinner("Loading critical alerts..."):
+            # Use cache for critical alerts
+            low_stock_items = cache_manager.cached_call(
+                st.session_state.shopify_client.get_low_stock_products,
+                "low_stock_products",
+                ttl=180,  # 3 minutes cache
+                threshold=5
+            )
+            
+            out_of_stock_items = cache_manager.cached_call(
+                st.session_state.shopify_client.get_out_of_stock_products,
+                "out_of_stock_products",
+                ttl=180  # 3 minutes cache
+            )
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("⚠️ Low Stock Items")
+            if low_stock_items:
+                df_low = pd.DataFrame(low_stock_items)
+                st.dataframe(
+                    df_low[['title', 'sku', 'inventory_quantity', 'price']], 
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.success("✅ No low stock items!")
+        
+        with col2:
+            st.subheader("🚫 Out of Stock Items")
+            if out_of_stock_items:
+                df_out = pd.DataFrame(out_of_stock_items)
+                st.dataframe(
+                    df_out[['title', 'sku', 'price']], 
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.success("✅ No out of stock items!")
+    
+    except Exception as e:
+        st.error(f"❌ Error loading alerts: {str(e)}")
+
+def browse_products_tab():
+    """Browse and search products with pagination for better performance."""
+    st.header("🔍 Browse Products")
+    
+    # Search and filter controls
+    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+    
+    with col1:
+        search_term = st.text_input(
+            "🔍 Search Products", 
+            placeholder="Search by title, SKU, or product type...",
+            key="product_search"
+        )
+    
+    with col2:
+        stock_filter = st.selectbox(
+            "📦 Stock Status",
+            ["All", "In Stock", "Low Stock (≤5)", "Out of Stock"],
+            key="stock_filter"
+        )
+    
+    with col3:
+        st.session_state.products_per_page = st.selectbox(
+            "Items per page",
+            [10, 25, 50, 100],
+            index=1,  # Default to 25
+            key="items_per_page"
+        )
+    
+    with col4:
+        view_mode = st.selectbox("View", ["Table", "Cards"], key="view_mode")
+    
+    # Reset pagination when filters change
+    if st.button("🔍 Search", type="primary") or 'last_search' not in st.session_state or st.session_state.get('last_search') != (search_term, stock_filter):
+        st.session_state.current_page = 1
+        st.session_state.last_search = (search_term, stock_filter)
+    
+    try:
+        # Load products with pagination and caching
         with st.spinner("Loading products..."):
-            products = st.session_state.shopify_client.get_all_products()
+            cache_key = f"products_page_{st.session_state.current_page}_{st.session_state.products_per_page}_{search_term}_{stock_filter}"
             
-            if not products:
-                st.warning("No products found in your store.")
-                return
-            
-            # Create DataFrame for easier manipulation
-            product_data = []
-            for product in products:
-                for variant in product.get('variants', []):
-                    product_data.append({
-                        'product_id': product['id'],
-                        'variant_id': variant['id'],
-                        'title': product['title'],
-                        'variant_title': variant.get('title', 'Default Title'),
-                        'sku': variant.get('sku', ''),
-                        'price': float(variant.get('price', 0)),
-                        'inventory_quantity': variant.get('inventory_quantity', 0),
-                        'inventory_policy': variant.get('inventory_policy', 'deny'),
-                        'fulfillment_service': variant.get('fulfillment_service', 'manual'),
-                        'weight': variant.get('weight', 0),
-                        'created_at': product.get('created_at', ''),
-                        'updated_at': product.get('updated_at', ''),
-                        'product_type': product.get('product_type', ''),
-                        'vendor': product.get('vendor', ''),
-                        'tags': product.get('tags', '')
-                    })
-            
-            df = pd.DataFrame(product_data)
-            
-            # Search and filter controls
-            col1, col2, col3 = st.columns([2, 1, 1])
-            
-            with col1:
-                search_term = st.text_input(
-                    "🔍 Search Products", 
-                    placeholder="Search by title, SKU, or product type..."
-                )
-            
-            with col2:
-                stock_filter = st.selectbox(
-                    "📦 Stock Status",
-                    ["All", "In Stock", "Low Stock (≤5)", "Out of Stock"]
-                )
-            
-            with col3:
-                sort_by = st.selectbox(
-                    "📊 Sort By",
-                    ["Title", "Price", "Inventory", "Updated"]
-                )
-            
-            # Apply filters
-            filtered_df = df.copy()
-            
-            if search_term:
-                mask = (
-                    filtered_df['title'].str.contains(search_term, case=False, na=False) |
-                    filtered_df['sku'].str.contains(search_term, case=False, na=False) |
-                    filtered_df['product_type'].str.contains(search_term, case=False, na=False)
-                )
-                filtered_df = filtered_df[mask]
-            
-            if stock_filter == "In Stock":
-                filtered_df = filtered_df[filtered_df['inventory_quantity'] > 5]
-            elif stock_filter == "Low Stock (≤5)":
-                filtered_df = filtered_df[(filtered_df['inventory_quantity'] > 0) & (filtered_df['inventory_quantity'] <= 5)]
-            elif stock_filter == "Out of Stock":
-                filtered_df = filtered_df[filtered_df['inventory_quantity'] == 0]
-            
-            # Sort results
-            if sort_by == "Title":
-                filtered_df = filtered_df.sort_values('title')
-            elif sort_by == "Price":
-                filtered_df = filtered_df.sort_values('price', ascending=False)
-            elif sort_by == "Inventory":
-                filtered_df = filtered_df.sort_values('inventory_quantity', ascending=False)
-            elif sort_by == "Updated":
-                filtered_df = filtered_df.sort_values('updated_at', ascending=False)
-            
-            # Display results
-            st.write(f"**Showing {len(filtered_df)} of {len(df)} products**")
-            
-            # Product cards or table view
-            view_mode = st.radio("View Mode", ["Table", "Cards"], horizontal=True)
-            
-            if view_mode == "Table":
-                # Prepare display columns
-                display_cols = [
-                    'title', 'variant_title', 'sku', 'price', 
-                    'inventory_quantity', 'product_type', 'vendor'
-                ]
-                
-                # Add color coding for stock levels
-                def highlight_stock(val):
-                    if val == 0:
-                        return 'background-color: #ffebee'  # Light red
-                    elif val <= 5:
-                        return 'background-color: #fff3e0'  # Light orange
-                    else:
-                        return 'background-color: #e8f5e8'  # Light green
-                
-                styled_df = filtered_df[display_cols].style.applymap(
-                    highlight_stock, 
-                    subset=['inventory_quantity']
-                )
-                
-                st.dataframe(styled_df, use_container_width=True, hide_index=True)
-                
-            else:  # Cards view
-                # Display as cards
-                for i in range(0, len(filtered_df), 3):
-                    cols = st.columns(3)
-                    for j, col in enumerate(cols):
-                        if i + j < len(filtered_df):
-                            row = filtered_df.iloc[i + j]
-                            with col:
-                                with st.container():
-                                    st.markdown(f"**{row['title']}**")
-                                    if row['variant_title'] != 'Default Title':
-                                        st.write(f"*{row['variant_title']}*")
-                                    
-                                    col_a, col_b = st.columns(2)
-                                    with col_a:
-                                        st.write(f"**Price:** ${row['price']:.2f}")
-                                        st.write(f"**SKU:** {row['sku']}")
-                                    with col_b:
-                                        # Stock status with color
-                                        stock = row['inventory_quantity']
-                                        if stock == 0:
-                                            st.write(f"**Stock:** :red[{stock}] (Out)")
-                                        elif stock <= 5:
-                                            st.write(f"**Stock:** :orange[{stock}] (Low)")
-                                        else:
-                                            st.write(f"**Stock:** :green[{stock}] (Good)")
-                                        
-                                        st.write(f"**Type:** {row['product_type']}")
-                                    
-                                    if st.button(f"Edit", key=f"edit_{row['variant_id']}"):
-                                        edit_product_modal(row)
-            
+            products_data = cache_manager.cached_call(
+                st.session_state.shopify_client.get_products_paginated,
+                "products_paginated",
+                ttl=120,  # 2 minutes cache
+                page=st.session_state.current_page,
+                limit=st.session_state.products_per_page,
+                search=search_term if search_term else None,
+                stock_filter=stock_filter if stock_filter != "All" else None
+            )
+        
+        if 'error' in products_data:
+            st.error(f"❌ Error loading products: {products_data['error']}")
+            return
+        
+        products = products_data['products']
+        
+        if not products:
+            st.warning("No products found matching your criteria.")
+            return
+        
+        # Display results info and pagination controls
+        col1, col2, col3 = st.columns([2, 1, 1])
+        
+        with col1:
+            st.write(f"**Showing {len(products)} products** (Page {st.session_state.current_page})")
+        
+        with col2:
+            if st.button("⬅️ Previous", disabled=st.session_state.current_page <= 1):
+                st.session_state.current_page -= 1
+                st.rerun()
+        
+        with col3:
+            if st.button("Next ➡️", disabled=not products_data.get('has_more', False)):
+                st.session_state.current_page += 1
+                st.rerun()
+        
+        # Display products
+        if view_mode == "Table":
+            display_products_table(products)
+        else:
+            display_products_cards(products)
+        
+        # Pagination controls at bottom
+        st.markdown("---")
+        col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+        
+        with col1:
+            if st.button("⬅️ Prev", disabled=st.session_state.current_page <= 1, key="prev_bottom"):
+                st.session_state.current_page -= 1
+                st.rerun()
+        
+        with col2:
+            st.write(f"Page {st.session_state.current_page}")
+        
+        with col3:
+            if st.button("Next ➡️", disabled=not products_data.get('has_more', False), key="next_bottom"):
+                st.session_state.current_page += 1
+                st.rerun()
+        
+        with col4:
+            if st.button("🔄 Refresh"):
+                cache_manager.invalidate("products_paginated")
+                st.rerun()
+    
     except Exception as e:
         st.error(f"❌ Error loading products: {str(e)}")
+        st.info("💡 Try reducing the number of items per page or refreshing the page.")
+
+def display_products_table(products):
+    """Display products in table format with color coding."""
+    df = pd.DataFrame(products)
+    
+    if df.empty:
+        return
+    
+    # Prepare display columns
+    display_cols = ['title', 'variant_title', 'sku', 'price', 'inventory_quantity', 'product_type', 'vendor']
+    
+    # Create a formatted version for display
+    display_df = df[display_cols].copy()
+    display_df['price'] = display_df['price'].apply(lambda x: f"${x:.2f}")
+    
+    # Color code based on stock status
+    def color_stock_status(row):
+        colors = []
+        for col in display_cols:
+            if col == 'inventory_quantity':
+                qty = row[col]
+                if qty == 0:
+                    colors.append('background-color: #ffcdd2')  # Light red
+                elif qty <= 5:
+                    colors.append('background-color: #ffe0b2')  # Light orange  
+                else:
+                    colors.append('background-color: #dcedc8')  # Light green
+            else:
+                colors.append('')
+        return colors
+    
+    # Apply styling
+    styled_df = display_df.style.apply(color_stock_status, axis=1)
+    
+    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+
+def display_products_cards(products):
+    """Display products in card format."""
+    # Display 3 cards per row
+    for i in range(0, len(products), 3):
+        cols = st.columns(3)
+        for j, col in enumerate(cols):
+            if i + j < len(products):
+                product = products[i + j]
+                with col:
+                    with st.container():
+                        st.markdown(f"**{product['title']}**")
+                        if product['variant_title'] != 'Default Title':
+                            st.caption(f"*{product['variant_title']}*")
+                        
+                        # Product details
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            st.write(f"**Price:** ${product['price']:.2f}")
+                            st.write(f"**SKU:** {product['sku']}")
+                        with col_b:
+                            # Stock status with color
+                            stock = product['inventory_quantity']
+                            status = product.get('stock_status', 'good')
+                            
+                            if status == 'out':
+                                st.write(f"**Stock:** :red[{stock}] (Out)")
+                            elif status == 'low':
+                                st.write(f"**Stock:** :orange[{stock}] (Low)")
+                            else:
+                                st.write(f"**Stock:** :green[{stock}] (Good)")
+                            
+                            st.write(f"**Type:** {product.get('product_type', 'N/A')}")
+                        
+                        # Quick edit button
+                        if st.button(f"✏️ Edit", key=f"edit_{product['variant_id']}", use_container_width=True):
+                            edit_product_modal(product)
 
 def edit_product_modal(product_data):
     """Modal for editing individual product."""
