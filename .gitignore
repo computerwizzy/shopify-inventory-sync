@@ -3,9 +3,6 @@
 .env.local
 .env.production
 
-# Streamlit secrets
-.streamlit/secrets.toml
-
 # Python
 __pycache__/
 *.py[cod]
@@ -29,13 +26,9 @@ wheels/
 *.egg
 MANIFEST
 
-# PyInstaller
-*.manifest
-*.spec
-
 # Virtual environments
-env/
 venv/
+env/
 ENV/
 env.bak/
 venv.bak/
@@ -45,36 +38,33 @@ venv.bak/
 .idea/
 *.swp
 *.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
 
 # Logs
 *.log
 logs/
 sync_scheduler.log
-job_history_*.json
-job_config_*.json
 
 # Temporary files
-temp/
-tmp/
 *.tmp
-*_temp_*
+temp/
+uploads/
 
-# Data files (unless explicitly needed)
-*.csv
-*.xlsx
-*.xls
-data/
-downloads/
+# Config backups
+*.backup
+config/*.backup
 
-# OS generated files
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+# Cache
+.cache/
+.pytest_cache/
 
-# Shopify credentials (backup protection)
-*shopify*token*
-*access*token*
+# Coverage reports
+htmlcov/
+.coverage
+coverage.xml
+*.cover
+.hypothesis/

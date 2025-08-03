@@ -164,6 +164,59 @@ class ShopifyClient:
         response = self._make_request('GET', 'shop.json')
         return response.get('shop', {})
     
+    def get_all_collections(self) -> List[Dict]:
+        """
+        Get all smart and custom collections from Shopify store.
+        
+        Returns:
+            List[Dict]: All collections
+        """
+        all_collections = []
+        
+        # Get smart collections
+        smart_collections_response = self._make_request('GET', 'smart_collections.json')
+        all_collections.extend(smart_collections_response.get('smart_collections', []))
+        
+        # Get custom collections
+        custom_collections_response = self._make_request('GET', 'custom_collections.json')
+        all_collections.extend(custom_collections_response.get('custom_collections', []))
+        
+        return all_collections
+
+    def get_products_by_collection(self, collection_ids: List[int], limit: int = 250) -> List[Dict]:
+        """
+        Get all products for a list of collection IDs.
+
+        Args:
+            collection_ids: List of collection IDs
+            limit: Number of products per page (max 250)
+
+        Returns:
+            List[Dict]: All products in the specified collections
+        """
+        all_products = []
+        for collection_id in collection_ids:
+            params = {
+                'collection_id': collection_id,
+                'limit': min(limit, 250),
+                'fields': 'id,title,handle,variants'
+            }
+            
+            # Get first page
+            response = self._make_request('GET', 'products.json', params=params)
+            products = response.get('products', [])
+            all_products.extend(products)
+            
+            # Get remaining pages using pagination
+            while len(products) == params['limit']:
+                # Get next page using the last product's ID
+                params['since_id'] = products[-1]['id']
+                response = self._make_request('GET', 'products.json', params=params)
+                products = response.get('products', [])
+                all_products.extend(products)
+        
+        return all_products
+
     def get_all_products(self, limit: int = 250) -> List[Dict]:
         """
         Get all products from Shopify store.

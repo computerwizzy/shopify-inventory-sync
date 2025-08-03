@@ -9,6 +9,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.scheduler import SyncScheduler
 from src.feed_sources import FeedConfigManager, FeedSourceManager
 from src.column_mapper import ColumnMapper
+from src.shopify_client import ShopifyClient
 
 st.set_page_config(
     page_title="Scheduled Sync",
@@ -25,6 +26,13 @@ if 'config_manager' not in st.session_state:
 
 if 'feed_manager' not in st.session_state:
     st.session_state.feed_manager = FeedSourceManager()
+
+if 'shopify_client' not in st.session_state:
+    try:
+        st.session_state.shopify_client = ShopifyClient()
+    except Exception as e:
+        st.error(f"Failed to initialize Shopify Client: {e}")
+        st.stop()
 
 def main():
     st.title("⏰ Scheduled Synchronization")
@@ -80,6 +88,28 @@ def create_schedule_tab():
         )
         
         enabled = st.checkbox("Enable Job", value=True)
+
+    # Collection selection
+    st.subheader("🛍️ Shopify Collection Selection")
+    try:
+        with st.spinner("Fetching Shopify collections..."):
+            collections = st.session_state.shopify_client.get_all_collections()
+        
+        if collections:
+            collection_options = {c['title']: c['id'] for c in collections}
+            selected_collections = st.multiselect(
+                "Select Collections to Sync",
+                options=list(collection_options.keys()),
+                help="Select one or more collections to sync. If none are selected, all products will be synced."
+            )
+            st.session_state.selected_collection_ids = [collection_options[c] for c in selected_collections]
+        else:
+            st.info("No collections found in your Shopify store.")
+            st.session_state.selected_collection_ids = []
+
+    except Exception as e:
+        st.error(f"❌ Failed to fetch collections: {e}")
+        st.session_state.selected_collection_ids = []
     
     # Schedule configuration
     st.subheader("🕐 Schedule Configuration")
@@ -477,6 +507,7 @@ def create_scheduled_job(job_id: str, feed_config_name: str, enabled: bool):
         return
     
     sync_options = getattr(st.session_state, 'sync_options', {})
+    collection_ids = getattr(st.session_state, 'selected_collection_ids', [])
     
     try:
         # Determine schedule type
@@ -497,14 +528,15 @@ def create_scheduled_job(job_id: str, feed_config_name: str, enabled: bool):
                 schedule_config=schedule_config,
                 column_mapping=column_mapping,
                 sync_fields=sync_fields,
-                sync_options=sync_options
+                sync_options=sync_options,
+                collection_ids=collection_ids
             )
             
             if success:
                 st.success(f"✅ Scheduled job '{job_id}' created successfully!")
                 
                 # Clear form
-                for key in ['schedule_config', 'column_mapping', 'sync_fields', 'sync_options', 'schedule_start_time']:
+                for key in ['schedule_config', 'column_mapping', 'sync_fields', 'sync_options', 'schedule_start_time', 'selected_collection_ids']:
                     if key in st.session_state:
                         del st.session_state[key]
                 

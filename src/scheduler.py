@@ -52,7 +52,7 @@ class SyncScheduler:
     def add_scheduled_sync(self, job_id: str, feed_config_name: str, 
                           schedule_type: str, schedule_config: Dict,
                           column_mapping: Dict = None, sync_fields: Dict = None,
-                          sync_options: Dict = None) -> bool:
+                          sync_options: Dict = None, collection_ids: List[int] = None) -> bool:
         """
         Add a scheduled sync job.
         
@@ -62,6 +62,7 @@ class SyncScheduler:
             schedule_type: 'cron' or 'interval'
             schedule_config: Schedule configuration parameters
             column_mapping: Column mapping configuration
+            collection_ids: List of collection IDs to sync
             
         Returns:
             bool: True if job added successfully
@@ -79,6 +80,7 @@ class SyncScheduler:
                 'column_mapping': column_mapping or {},
                 'sync_fields': sync_fields or {},
                 'sync_options': sync_options or {},
+                'collection_ids': collection_ids or [],
                 'schedule_type': schedule_type,
                 'schedule_config': schedule_config,
                 'created_at': datetime.now().isoformat(),
@@ -204,7 +206,12 @@ class SyncScheduler:
                     sku_matcher = SKUMatcher(shopify_client)
                     
                     # Get Shopify products with resilient retry
-                    shopify_products = shopify_client.get_all_products()
+                    collection_ids = job_data.get('collection_ids', [])
+                    if collection_ids:
+                        self.logger.info(f"Syncing products from collections: {collection_ids}")
+                        shopify_products = shopify_client.get_products_by_collection(collection_ids)
+                    else:
+                        shopify_products = shopify_client.get_all_products()
                     
                     # Match SKUs
                     matched_data = sku_matcher.match_skus(df, column_mapping, shopify_products)

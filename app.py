@@ -33,6 +33,12 @@ if 'column_mapping' not in st.session_state:
     st.session_state.column_mapping = {}
 if 'matched_data' not in st.session_state:
     st.session_state.matched_data = None
+if 'shopify_client' not in st.session_state:
+    try:
+        st.session_state.shopify_client = ShopifyClient()
+    except Exception as e:
+        st.error(f"Failed to initialize Shopify Client: {e}")
+        st.stop()
 
 def main():
     st.title("📦 Inventory Synchronization App")
