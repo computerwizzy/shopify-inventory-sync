@@ -321,10 +321,13 @@ def config_column_mapping(feed_config_name: str):
                     
                     if override_mapping:
                         st.info(f"📝 **Override mappings**: {override_mapping}")
-                        st.session_state.column_mapping = override_mapping
+                        # Merge override with feed mapping
+                        merged_mapping = feed_mapping.copy()
+                        merged_mapping.update(override_mapping)
+                        st.session_state.column_mapping = merged_mapping
                     else:
-                        # Use feed mapping
-                        st.session_state.column_mapping = {}
+                        # Use feed mapping directly
+                        st.session_state.column_mapping = feed_mapping.copy()
                 
                 # Always ensure we have the feed mapping available
                 if not hasattr(st.session_state, 'column_mapping') or not st.session_state.column_mapping:
@@ -496,8 +499,21 @@ def create_scheduled_job(job_id: str, feed_config_name: str, enabled: bool):
         return
     
     column_mapping = getattr(st.session_state, 'column_mapping', {})
-    if 'SKU' not in column_mapping or 'Quantity' not in column_mapping:
-        st.error("❌ Please map at least SKU and Quantity columns")
+    
+    # Debug information
+    if column_mapping:
+        st.info(f"📋 Current column mapping: {column_mapping}")
+    
+    # Check for required columns
+    required_missing = []
+    if 'SKU' not in column_mapping:
+        required_missing.append('SKU')
+    if 'Quantity' not in column_mapping:
+        required_missing.append('Quantity')
+    
+    if required_missing:
+        st.error(f"❌ Please map at least SKU and Quantity columns. Missing: {', '.join(required_missing)}")
+        st.info("💡 **Tip**: Configure column mapping in the 'Column Mapping' section above, or set it up in Feed Sources first.")
         return
     
     # Check sync fields selection
