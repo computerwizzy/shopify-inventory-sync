@@ -27,7 +27,7 @@ def main():
     st.markdown("Configure external data sources for automated inventory synchronization.")
     
     # Tabs for different functions
-    tab1, tab2, tab3 = st.tabs(["📝 Configure Feeds", "📋 Manage Feeds", "🧪 Test Connections"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📝 Configure Feeds", "📋 Manage Feeds", "🧪 Test Connections", "🔍 Diagnose Issues"])
     
     with tab1:
         configure_feeds_tab()
@@ -37,6 +37,9 @@ def main():
     
     with tab3:
         test_connections_tab()
+    
+    with tab4:
+        diagnose_issues_tab()
 
 def configure_feeds_tab():
     st.header("📝 Configure New Feed Source")
@@ -753,6 +756,172 @@ def download_sample_data(name: str, config: Dict):
                 
         except Exception as e:
             st.error(f"❌ Failed to download sample data: {str(e)}")
+
+def diagnose_issues_tab():
+    """Diagnose column mapping and feed issues."""
+    st.header("🔍 Diagnose Feed Issues")
+    st.markdown("Troubleshoot column mapping and data issues with your feeds.")
+    
+    configs = st.session_state.config_manager.configs
+    
+    if not configs:
+        st.info("📭 No feed configurations to diagnose. Create one first.")
+        return
+    
+    selected_config = st.selectbox(
+        "Select Configuration to Diagnose",
+        list(configs.keys()),
+        help="Choose the feed configuration you're having issues with"
+    )
+    
+    if selected_config:
+        config = configs[selected_config]
+        
+        st.subheader(f"🔍 Diagnosing: {selected_config}")
+        
+        # Show current configuration
+        with st.expander("📋 Current Configuration"):
+            st.json(config)
+        
+        if st.button("🔍 Run Full Diagnosis", type="primary"):
+            run_full_diagnosis(selected_config, config)
+
+def run_full_diagnosis(name: str, config: Dict):
+    """Run comprehensive diagnosis of a feed configuration."""
+    with st.spinner(f"Running diagnosis for {name}..."):
+        try:
+            # Step 1: Test connection
+            st.write("**Step 1: Testing Connection**")
+            feed_type = config.get('type')
+            
+            if feed_type == 'url':
+                success = st.session_state.feed_manager.test_url_connection(
+                    url=config['url'],
+                    headers=config.get('headers'),
+                    timeout=config.get('timeout', 30)
+                )
+                if success:
+                    st.success("✅ Connection test passed")
+                else:
+                    st.error("❌ Connection test failed")
+                    return
+            
+            # Step 2: Download and analyze data
+            st.write("**Step 2: Downloading and Analyzing Data**")
+            
+            if feed_type == 'url':
+                file_path = st.session_state.feed_manager.download_from_url(
+                    url=config['url'],
+                    headers=config.get('headers'),
+                    auth=tuple(config['auth']) if config.get('auth') else None,
+                    timeout=config.get('timeout', 30)
+                )
+                processor = FileProcessor()
+                df = processor.process_file_by_path(file_path)
+            else:
+                st.warning("Full diagnosis currently only supports URL feeds")
+                return
+            
+            if df.empty:
+                st.error("❌ No data found in feed")
+                return
+            
+            st.success(f"✅ Downloaded {len(df)} rows with {len(df.columns)} columns")
+            
+            # Step 3: Analyze columns
+            st.write("**Step 3: Column Analysis**")
+            available_columns = list(df.columns)
+            st.info(f"**Available columns in feed**: {', '.join(available_columns)}")
+            
+            # Step 4: Check column mapping
+            st.write("**Step 4: Column Mapping Validation**")
+            column_mapping = config.get('column_mapping', {})
+            selected_columns = config.get('selected_columns', [])
+            
+            if column_mapping:
+                st.info(f"**Current mapping**: {column_mapping}")
+                
+                # Check for missing columns
+                missing_columns = []
+                existing_columns = []
+                
+                for field, source_column in column_mapping.items():
+                    if source_column in available_columns:
+                        existing_columns.append(source_column)
+                        st.success(f"✅ {field} → {source_column} (exists)")
+                    else:
+                        missing_columns.append(source_column)
+                        st.error(f"❌ {field} → {source_column} (MISSING)")
+                
+                if missing_columns:
+                    st.error(f"**Found {len(missing_columns)} missing columns**: {', '.join(missing_columns)}")
+                    
+                    # Suggest fixes
+                    st.write("**💡 Suggested Fixes:**")
+                    for missing_col in missing_columns:
+                        st.write(f"- **{missing_col}**: Look for similar columns like:")
+                        similar_cols = [col for col in available_columns if missing_col.lower() in col.lower() or col.lower() in missing_col.lower()]
+                        if similar_cols:
+                            for similar in similar_cols[:3]:  # Show top 3 matches
+                                st.write(f"  - `{similar}`")
+                        else:
+                            st.write("  - No similar columns found")
+                else:
+                    st.success("✅ All mapped columns exist in the feed")
+            else:
+                st.warning("⚠️ No column mapping configured")
+            
+            # Step 5: Check selected columns
+            if selected_columns:
+                st.write("**Step 5: Selected Columns Validation**")
+                st.info(f"**Selected columns**: {', '.join(selected_columns)}")
+                
+                missing_selected = [col for col in selected_columns if col not in available_columns]
+                if missing_selected:
+                    st.error(f"❌ Selected columns not found in feed: {', '.join(missing_selected)}")
+                else:
+                    st.success("✅ All selected columns exist in the feed")
+            
+            # Step 6: Data quality check
+            st.write("**Step 6: Data Quality Check**")
+            if column_mapping and 'SKU' in column_mapping:
+                sku_column = column_mapping['SKU']
+                if sku_column in df.columns:
+                    sku_data = df[sku_column]
+                    null_count = sku_data.isnull().sum()
+                    empty_count = (sku_data == '').sum()
+                    duplicate_count = sku_data.duplicated().sum()
+                    
+                    st.write(f"**SKU Column ({sku_column}) Quality:**")
+                    if null_count > 0:
+                        st.warning(f"⚠️ {null_count} null SKUs found")
+                    if empty_count > 0:
+                        st.warning(f"⚠️ {empty_count} empty SKUs found")
+                    if duplicate_count > 0:
+                        st.warning(f"⚠️ {duplicate_count} duplicate SKUs found")
+                    
+                    if null_count == 0 and empty_count == 0 and duplicate_count == 0:
+                        st.success("✅ SKU data quality looks good")
+            
+            # Show sample of processed data
+            st.write("**Step 7: Processed Data Preview**")
+            
+            if column_mapping:
+                # Apply column mapping to show final result
+                mapper = ColumnMapper(df.columns.tolist())
+                mapped_df = mapper.get_mapped_data(df, column_mapping)
+                
+                if not mapped_df.empty:
+                    st.success(f"✅ Successfully mapped data: {len(mapped_df)} rows, {len(mapped_df.columns)} columns")
+                    st.dataframe(mapped_df.head(5), use_container_width=True)
+                else:
+                    st.error("❌ Column mapping resulted in empty dataset")
+            else:
+                st.dataframe(df.head(5), use_container_width=True)
+                
+        except Exception as e:
+            st.error(f"❌ Diagnosis failed: {str(e)}")
+            st.write("**Error Details:**", str(e))
 
 if __name__ == "__main__":
     main()
