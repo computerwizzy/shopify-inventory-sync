@@ -51,7 +51,8 @@ class SyncScheduler:
     
     def add_scheduled_sync(self, job_id: str, feed_config_name: str, 
                           schedule_type: str, schedule_config: Dict,
-                          column_mapping: Dict = None) -> bool:
+                          column_mapping: Dict = None, sync_fields: Dict = None,
+                          sync_options: Dict = None) -> bool:
         """
         Add a scheduled sync job.
         
@@ -76,6 +77,8 @@ class SyncScheduler:
                 'job_id': job_id,
                 'feed_config_name': feed_config_name,
                 'column_mapping': column_mapping or {},
+                'sync_fields': sync_fields or {},
+                'sync_options': sync_options or {},
                 'schedule_type': schedule_type,
                 'schedule_config': schedule_config,
                 'created_at': datetime.now().isoformat(),
@@ -209,8 +212,12 @@ class SyncScheduler:
                     # Filter for exact matches only in automated sync
                     sync_data = [m for m in matched_data if m['match_type'] == 'exact']
                     
+                    # Get sync fields and options from job data
+                    sync_fields = job_data.get('sync_fields', {'inventory_quantity': True})
+                    sync_options = job_data.get('sync_options', {})
+                    
                     # Perform sync with enhanced error handling
-                    sync_results = self.perform_batch_sync(shopify_client, sync_data)
+                    sync_results = self.perform_batch_sync(shopify_client, sync_data, sync_fields, sync_options)
                     result['records_synced'] = len([r for r in sync_results if r['success']])
                     
                     # Log API statistics for monitoring
@@ -311,28 +318,66 @@ class SyncScheduler:
         else:
             raise ValueError(f"Unsupported feed type: {feed_type}")
     
-    def perform_batch_sync(self, shopify_client: ShopifyClient, sync_data: List[Dict]) -> List[Dict]:
-        """Perform batch inventory sync with enhanced error handling."""
+    def perform_batch_sync(self, shopify_client: ShopifyClient, sync_data: List[Dict], 
+                          sync_fields: Dict = None, sync_options: Dict = None) -> List[Dict]:
+        """Perform batch sync with selective field updates and enhanced error handling."""
         results = []
         
-        # Process items in smaller batches to reduce API load
-        batch_size = 5  # Smaller batch size for better resilience
+        # Use configured batch size or default
+        batch_size = sync_options.get('batch_size', 5) if sync_options else 5
+        sync_fields = sync_fields or {'inventory_quantity': True}  # Default to inventory only
         
         for i in range(0, len(sync_data), batch_size):
             batch = sync_data[i:i + batch_size]
             
             for item in batch:
                 try:
-                    shopify_client.update_inventory(
-                        item['variant_id'],
-                        item['new_quantity']
-                    )
-                    results.append({
-                        'variant_id': item['variant_id'],
-                        'sku': item['shopify_sku'],
-                        'success': True,
-                        'error': None
-                    })
+                    # Skip zero inventory updates if configured
+                    if (sync_options and sync_options.get('skip_zero_inventory') and 
+                        item.get('new_quantity', 0) == 0):
+                        continue
+                    
+                    # Prepare update data from the item
+                    update_data = {
+                        'quantity': item.get('new_quantity'),
+                        'title': item.get('title'),
+                        'price': item.get('price'),
+                        'compare_at_price': item.get('compare_at_price'),
+                        'vendor': item.get('vendor'),
+                        'product_type': item.get('product_type'),
+                        'sku': item.get('sku'),
+                        'weight': item.get('weight')
+                    }
+                    
+                    # Use new selective update method
+                    if any(field for field in sync_fields.values() if field):
+                        update_result = shopify_client.update_product_fields(
+                            product_id=item.get('product_id'),
+                            variant_id=item['variant_id'],
+                            update_data=update_data,
+                            sync_fields=sync_fields
+                        )
+                        results.append({
+                            'variant_id': item['variant_id'],
+                            'sku': item['shopify_sku'],
+                            'success': True,
+                            'error': None,
+                            'updated_fields': [field for field, enabled in sync_fields.items() if enabled],
+                            'details': update_result
+                        })
+                    else:
+                        # Fallback to inventory-only update
+                        shopify_client.update_inventory(
+                            item['variant_id'],
+                            item['new_quantity']
+                        )
+                        results.append({
+                            'variant_id': item['variant_id'],
+                            'sku': item['shopify_sku'],
+                            'success': True,
+                            'error': None,
+                            'updated_fields': ['inventory_quantity']
+                        })
                     
                 except Exception as e:
                     error_msg = str(e)

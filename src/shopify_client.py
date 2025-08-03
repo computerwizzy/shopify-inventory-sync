@@ -271,6 +271,69 @@ class ShopifyClient:
         response = self._make_request('POST', 'inventory_levels/set.json', json_data=json_data)
         return response.get('inventory_level', {})
     
+    def update_product_fields(self, product_id: int, variant_id: int, update_data: Dict, sync_fields: Dict) -> Dict:
+        """
+        Update specific fields on a product and its variant based on sync_fields configuration.
+        
+        Args:
+            product_id: Shopify product ID
+            variant_id: Shopify variant ID  
+            update_data: Data to update with (from feed)
+            sync_fields: Dictionary indicating which fields to sync
+            
+        Returns:
+            Dict: Update results
+        """
+        results = {'product': None, 'variant': None, 'inventory': None}
+        
+        # Prepare product update data
+        product_updates = {}
+        if sync_fields.get('product_title') and 'title' in update_data:
+            product_updates['title'] = update_data['title']
+        if sync_fields.get('product_description') and 'body_html' in update_data:
+            product_updates['body_html'] = update_data['body_html']
+        if sync_fields.get('product_vendor') and 'vendor' in update_data:
+            product_updates['vendor'] = update_data['vendor']
+        if sync_fields.get('product_type') and 'product_type' in update_data:
+            product_updates['product_type'] = update_data['product_type']
+        if sync_fields.get('product_status') and 'status' in update_data:
+            product_updates['status'] = update_data['status']
+        
+        # Update product if there are product-level changes
+        if product_updates:
+            json_data = {'product': product_updates}
+            response = self._make_request('PUT', f'products/{product_id}.json', json_data=json_data)
+            results['product'] = response.get('product', {})
+        
+        # Prepare variant update data
+        variant_updates = {}
+        if sync_fields.get('variant_price') and 'price' in update_data:
+            variant_updates['price'] = str(update_data['price'])
+        if sync_fields.get('compare_at_price') and 'compare_at_price' in update_data:
+            variant_updates['compare_at_price'] = str(update_data['compare_at_price'])
+        if sync_fields.get('variant_weight') and 'weight' in update_data:
+            variant_updates['weight'] = update_data['weight']
+        if sync_fields.get('variant_sku') and 'sku' in update_data:
+            variant_updates['sku'] = update_data['sku']
+        if sync_fields.get('track_inventory') and 'inventory_management' in update_data:
+            variant_updates['inventory_management'] = update_data['inventory_management']
+        
+        # Update variant if there are variant-level changes
+        if variant_updates:
+            json_data = {'variant': variant_updates}
+            response = self._make_request('PUT', f'variants/{variant_id}.json', json_data=json_data)
+            results['variant'] = response.get('variant', {})
+        
+        # Update inventory quantity if selected
+        if sync_fields.get('inventory_quantity') and 'quantity' in update_data:
+            try:
+                inventory_result = self.update_inventory(variant_id, int(update_data['quantity']))
+                results['inventory'] = inventory_result
+            except Exception as e:
+                results['inventory'] = {'error': str(e)}
+        
+        return results
+    
     def bulk_update_inventory(self, updates: List[Dict], location_id: int = None) -> List[Dict]:
         """
         Update multiple inventory items in batch.

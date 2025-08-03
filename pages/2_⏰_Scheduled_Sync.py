@@ -95,6 +95,12 @@ def create_schedule_tab():
     if feed_config_name:
         config_column_mapping(feed_config_name)
     
+    # Sync field selection
+    st.subheader("🎯 Shopify Sync Fields")
+    st.write("Choose which Shopify fields to update during synchronization:")
+    
+    configure_sync_fields()
+    
     # Preview and save
     st.subheader("📋 Job Summary")
     
@@ -114,7 +120,10 @@ def configure_interval_schedule():
         interval_unit = st.selectbox("Time Unit", ["minutes", "hours", "days", "weeks"])
     
     with col3:
-        start_time = st.time_input("Start Time", value=datetime.now().time())
+        # Use session state to persist start time selection
+        if 'schedule_start_time' not in st.session_state:
+            st.session_state.schedule_start_time = datetime.now().time()
+        start_time = st.time_input("Start Time", value=st.session_state.schedule_start_time)
     
     # Store in session state
     st.session_state.schedule_config = {
@@ -364,6 +373,88 @@ def config_column_mapping(feed_config_name: str):
     except Exception as e:
         st.error(f"❌ Error configuring column mapping: {str(e)}")
 
+def configure_sync_fields():
+    """Configure which Shopify fields to sync."""
+    st.write("**Select which Shopify product fields to update:**")
+    
+    # Create columns for better layout
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Inventory & Stock:**")
+        inventory_qty = st.checkbox("Inventory Quantity", value=True, help="Update available inventory levels", key="sync_inventory_qty")
+        
+        st.write("**Product Information:**")
+        product_title = st.checkbox("Product Title/Name", value=False, help="Update product title/name", key="sync_title")
+        product_description = st.checkbox("Product Description", value=False, help="Update product description", key="sync_description")
+        
+        st.write("**Product Details:**")
+        product_vendor = st.checkbox("Vendor/Brand", value=False, help="Update product vendor/manufacturer", key="sync_vendor")
+        product_type = st.checkbox("Product Type", value=False, help="Update product type/category", key="sync_type")
+    
+    with col2:
+        st.write("**Pricing:**")
+        variant_price = st.checkbox("Product Price", value=False, help="Update product variant price", key="sync_price")
+        compare_price = st.checkbox("Compare At Price", value=False, help="Update compare at price (MSRP)", key="sync_compare_price")
+        
+        st.write("**Variant Details:**")
+        variant_weight = st.checkbox("Product Weight", value=False, help="Update product weight", key="sync_weight")
+        variant_sku = st.checkbox("Variant SKU", value=False, help="Update variant SKU", key="sync_sku")
+        
+        st.write("**Product Status:**")
+        product_status = st.checkbox("Product Status", value=False, help="Update product status (active/draft)", key="sync_status")
+        track_inventory = st.checkbox("Track Inventory", value=False, help="Enable/disable inventory tracking", key="sync_track_inventory")
+    
+    # Store selected sync fields in session state
+    sync_fields = {
+        'inventory_quantity': inventory_qty,
+        'product_title': product_title,
+        'product_description': product_description,
+        'product_vendor': product_vendor,
+        'product_type': product_type,
+        'variant_price': variant_price,
+        'compare_at_price': compare_price,
+        'variant_weight': variant_weight,
+        'variant_sku': variant_sku,
+        'product_status': product_status,
+        'track_inventory': track_inventory
+    }
+    
+    st.session_state.sync_fields = sync_fields
+    
+    # Show summary of selected fields
+    selected_fields = [field.replace('_', ' ').title() for field, enabled in sync_fields.items() if enabled]
+    if selected_fields:
+        st.success(f"✅ **Selected for sync**: {', '.join(selected_fields)}")
+    else:
+        st.warning("⚠️ **No fields selected!** Please select at least one field to sync.")
+    
+    # Advanced options
+    with st.expander("🔧 Advanced Sync Options"):
+        st.write("**Sync Behavior:**")
+        
+        col3, col4 = st.columns(2)
+        with col3:
+            only_update_existing = st.checkbox("Only update existing products", value=True, 
+                                             help="Skip products that don't exist in Shopify", key="sync_only_existing")
+            skip_zero_inventory = st.checkbox("Skip zero inventory updates", value=False,
+                                            help="Don't update products with 0 quantity", key="sync_skip_zero")
+        
+        with col4:
+            batch_size = st.number_input("Batch size", min_value=1, max_value=50, value=10,
+                                       help="Number of products to update per batch", key="sync_batch_size")
+            update_frequency = st.selectbox("Update frequency", 
+                                          ["All records", "Only changed records"],
+                                          help="How to determine which records to update", key="sync_frequency")
+        
+        # Store advanced options
+        st.session_state.sync_options = {
+            'only_update_existing': only_update_existing,
+            'skip_zero_inventory': skip_zero_inventory,
+            'batch_size': batch_size,
+            'update_frequency': update_frequency
+        }
+
 def create_scheduled_job(job_id: str, feed_config_name: str, enabled: bool):
     """Create the scheduled sync job."""
     if not job_id:
@@ -378,6 +469,14 @@ def create_scheduled_job(job_id: str, feed_config_name: str, enabled: bool):
     if 'SKU' not in column_mapping or 'Quantity' not in column_mapping:
         st.error("❌ Please map at least SKU and Quantity columns")
         return
+    
+    # Check sync fields selection
+    sync_fields = getattr(st.session_state, 'sync_fields', {})
+    if not any(sync_fields.values()):
+        st.error("❌ Please select at least one Shopify field to sync")
+        return
+    
+    sync_options = getattr(st.session_state, 'sync_options', {})
     
     try:
         # Determine schedule type
@@ -396,14 +495,16 @@ def create_scheduled_job(job_id: str, feed_config_name: str, enabled: bool):
                 feed_config_name=feed_config_name,
                 schedule_type=schedule_type,
                 schedule_config=schedule_config,
-                column_mapping=column_mapping
+                column_mapping=column_mapping,
+                sync_fields=sync_fields,
+                sync_options=sync_options
             )
             
             if success:
                 st.success(f"✅ Scheduled job '{job_id}' created successfully!")
                 
                 # Clear form
-                for key in ['schedule_config', 'column_mapping']:
+                for key in ['schedule_config', 'column_mapping', 'sync_fields', 'sync_options', 'schedule_start_time']:
                     if key in st.session_state:
                         del st.session_state[key]
                 
