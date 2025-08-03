@@ -76,162 +76,289 @@ def main():
         settings_tab()
 
 def dashboard_tab():
-    """Fast-loading dashboard with key metrics and quick actions."""
+    """Smart dashboard with load controls for large product catalogs."""
     st.header("📊 Inventory Dashboard")
     
-    # Cache control buttons
-    col1, col2, col3 = st.columns([1, 1, 4])
-    with col1:
-        if st.button("🔄 Refresh Data", help="Clear cache and reload data"):
-            cache_manager.invalidate("quick_metrics")
-            cache_manager.invalidate("low_stock")
-            st.rerun()
-    
-    with col2:
-        cache_info = cache_manager.get_cache_info()
-        st.caption(f"Cache: {cache_info['active_entries']} entries")
-    
-    try:
-        # Use cached quick metrics for fast loading
-        with st.spinner("Loading dashboard metrics..."):
-            metrics = cache_manager.cached_call(
-                st.session_state.shopify_client.get_quick_metrics,
-                "quick_metrics",
-                ttl=300  # 5 minutes cache
-            )
-        
-        if 'error' in metrics:
-            st.error(f"❌ Error loading metrics: {metrics['error']}")
-            return
-        
-        # Display performance indicator
-        if metrics.get('is_estimate'):
-            st.info(f"📊 **Quick Dashboard** - Showing estimates based on {metrics['sample_size']} recent products. Use 'Browse Products' for detailed view.")
-        
-        # Key metrics row
-        col1, col2, col3, col4, col5 = st.columns(5)
-        
-        with col1:
-            st.metric(
-                "Total Products", 
-                f"{metrics['total_products']:,}",
-                help="Total number of products in your store"
-            )
-        
-        with col2:
-            st.metric(
-                "Total Variants", 
-                f"{metrics['estimated_variants']:,}",
-                help="Estimated total number of product variants"
-            )
-        
-        with col3:
-            st.metric(
-                "Total Inventory", 
-                f"{metrics['estimated_inventory']:,}",
-                help="Estimated total inventory quantity"
-            )
-        
-        with col4:
-            st.metric(
-                "Inventory Value", 
-                f"${metrics['estimated_value']:,.2f}",
-                help="Estimated total inventory value"
-            )
-        
-        with col5:
-            st.metric(
-                "Store", 
-                metrics['shop_name'],
-                help="Your Shopify store name"
-            )
-        
-        # Stock status alerts
-        st.markdown("---")
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric(
-                "⚠️ Low Stock", 
-                f"{metrics['estimated_low_stock']:,}",
-                help="Estimated items with 5 or fewer units in stock"
-            )
-        
-        with col2:
-            st.metric(
-                "🚫 Out of Stock", 
-                f"{metrics['estimated_out_of_stock']:,}",
-                help="Estimated items with zero inventory"
-            )
-        
-        with col3:
-            st.metric(
-                "✅ Well Stocked", 
-                f"{metrics['estimated_well_stocked']:,}",
-                help="Estimated items with healthy stock levels"
-            )
-        
-        # Quick actions
-        st.markdown("---")
-        st.subheader("🚀 Quick Actions")
-        
+    # Load control panel
+    with st.expander("⚙️ **Load Controls** - Essential for Large Catalogs (10,000+ products)", expanded=False):
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            if st.button("🔍 Browse Products", type="primary", help="Browse and manage your products"):
-                # Switch to browse tab
-                pass
+            sample_size = st.selectbox(
+                "📊 Sample Size",
+                [50, 100, 250, 500, 1000],
+                index=1,  # Default to 100
+                help="Number of recent products to sample for estimates"
+            )
         
         with col2:
-            if st.button("📤 Export Sample", help="Export sample data for analysis"):
-                # Create a sample export
-                st.info("Use 'Browse Products' tab to export full inventory data")
+            metrics_mode = st.selectbox(
+                "📈 Metrics Mode", 
+                ["Quick (Estimates)", "Detailed (Slower)", "Count Only"],
+                help="Choose speed vs accuracy tradeoff"
+            )
         
         with col3:
-            if st.button("🔄 Sync Now", help="Run inventory synchronization"):
-                st.info("Navigate to Scheduled Sync to run inventory synchronization")
+            auto_refresh = st.selectbox(
+                "🔄 Auto Refresh",
+                ["Manual", "5 min", "15 min", "1 hour"],
+                help="Automatic cache refresh interval"
+            )
         
         with col4:
-            if st.button("⚙️ Bulk Operations", help="Perform bulk operations on products"):
-                st.info("Use the Bulk Operations tab for mass updates")
+            if st.button("🗑️ Clear All Cache", help="Clear all cached data"):
+                cache_manager.invalidate()
+                st.success("Cache cleared!")
+                st.rerun()
+    
+    # Store info and basic stats (always fast)
+    try:
+        # Always show store info quickly
+        shop_info = cache_manager.cached_call(
+            st.session_state.shopify_client.get_shop_info,
+            "shop_info",
+            ttl=3600  # 1 hour cache for shop info
+        )
         
-        # Quick insights
+        product_count = cache_manager.cached_call(
+            st.session_state.shopify_client.get_products_count,
+            "product_count",
+            ttl=300  # 5 minutes cache
+        )
+        
+        # Display store header
+        col1, col2, col3 = st.columns([2, 1, 1])
+        with col1:
+            st.subheader(f"🏪 {shop_info.get('name', 'Your Store')}")
+            st.caption(f"Total Products: **{product_count:,}**")
+        
+        with col2:
+            cache_info = cache_manager.get_cache_info()
+            st.metric("Cache Entries", cache_info['active_entries'])
+        
+        with col3:
+            if st.button("🔄 Refresh", help="Refresh dashboard data"):
+                cache_manager.invalidate("quick_metrics")
+                cache_manager.invalidate("detailed_metrics")
+                st.rerun()
+        
+        # Load appropriate metrics based on mode
+        if metrics_mode == "Count Only":
+            show_count_only_dashboard(product_count, shop_info)
+        elif metrics_mode == "Quick (Estimates)":
+            show_quick_dashboard(sample_size, product_count, shop_info)
+        else:  # Detailed mode
+            show_detailed_dashboard_with_warning(product_count, shop_info)
+            
+    except Exception as e:
+        st.error(f"❌ Error loading dashboard: {str(e)}")
+        st.info("💡 Try using 'Count Only' mode or check your Shopify connection.")
+
+def show_count_only_dashboard(product_count, shop_info):
+    """Ultra-fast dashboard showing only counts."""
+    st.info("📊 **Count Only Mode** - Ultra-fast loading for large catalogs")
+    
+    # Basic metrics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Products", f"{product_count:,}")
+    with col2:
+        st.metric("Store Status", "✅ Connected")
+    with col3:
+        st.metric("Mode", "Count Only")
+    
+    # Load control actions
+    st.markdown("---")
+    st.subheader("🎯 Targeted Actions")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**🔍 Browse Specific Products**")
+        if st.button("Browse with Filters", type="primary"):
+            st.info("Switch to 'Browse Products' tab to search and filter specific products")
+    
+    with col2:
+        st.markdown("**📊 Load Sample Analysis**")
+        if st.button("Get Sample Metrics"):
+            st.info("Switch to 'Quick (Estimates)' mode above to see sample-based metrics")
+
+def show_quick_dashboard(sample_size, product_count, shop_info):
+    """Quick dashboard with sample-based estimates."""
+    with st.spinner(f"Loading sample of {sample_size} products..."):
+        metrics = cache_manager.cached_call(
+            lambda: st.session_state.shopify_client.get_quick_metrics_with_sample(sample_size),
+            f"quick_metrics_{sample_size}",
+            ttl=300  # 5 minutes cache
+        )
+    
+    if 'error' in metrics:
+        st.error(f"❌ Error loading metrics: {metrics['error']}")
+        return
+    
+    # Performance indicator
+    st.info(f"📊 **Quick Mode** - Estimates based on {metrics.get('sample_size', sample_size)} recent products")
+    
+    # Key metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Products", f"{product_count:,}")
+        st.caption("Actual count")
+    
+    with col2:
+        st.metric("Est. Variants", f"{metrics.get('estimated_variants', 0):,}")
+        st.caption("Based on sample")
+    
+    with col3:
+        st.metric("Est. Inventory", f"{metrics.get('estimated_inventory', 0):,}")
+        st.caption("Total units")
+    
+    with col4:
+        st.metric("Est. Value", f"${metrics.get('estimated_value', 0):,.2f}")
+        st.caption("At retail price")
+    
+    # Stock alerts
+    st.markdown("---")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        low_stock = metrics.get('estimated_low_stock', 0)
+        st.metric("⚠️ Est. Low Stock", f"{low_stock:,}")
+    
+    with col2:
+        out_stock = metrics.get('estimated_out_of_stock', 0)
+        st.metric("🚫 Est. Out of Stock", f"{out_stock:,}")
+    
+    with col3:
+        well_stock = metrics.get('estimated_well_stocked', 0)
+        st.metric("✅ Est. Well Stocked", f"{well_stock:,}")
+    
+    # Action buttons with load awareness
+    st.markdown("---")
+    st.subheader("🎯 Smart Actions")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔍 Browse Products (Paginated)", type="primary"):
+            st.info("Switch to 'Browse Products' tab - loads 25 products at a time")
+    
+    with col2:
+        if st.button("⚠️ Load Critical Alerts"):
+            show_smart_critical_alerts()
+
+def show_detailed_dashboard_with_warning(product_count, shop_info):
+    """Detailed dashboard with performance warnings."""
+    # Performance warning for large catalogs
+    if product_count > 1000:
+        st.error(f"⚠️ **Performance Warning**: You have {product_count:,} products. Detailed mode may be very slow!")
+        st.warning("**Recommendation**: Use 'Quick (Estimates)' mode for better performance.")
+        
+        if not st.checkbox("I understand this may take several minutes", key="detailed_warning"):
+            st.stop()
+    
+    # Show estimated load time
+    estimated_time = max(5, product_count // 200)  # Rough estimate
+    st.info(f"⏱️ Estimated load time: ~{estimated_time} seconds for {product_count:,} products")
+    
+    # Load detailed metrics (this could be slow)
+    with st.spinner(f"Loading detailed analysis of {product_count:,} products..."):
+        try:
+            detailed_metrics = cache_manager.cached_call(
+                st.session_state.shopify_client.get_product_analytics,
+                "detailed_metrics",
+                ttl=600,  # 10 minutes cache for detailed analysis
+            )
+            
+            if detailed_metrics:
+                show_detailed_metrics(detailed_metrics)
+            else:
+                st.error("Failed to load detailed metrics")
+                
+        except Exception as e:
+            st.error(f"❌ Detailed analysis failed: {str(e)}")
+            st.info("💡 Switch to 'Quick (Estimates)' mode for better reliability")
+
+def show_detailed_metrics(metrics):
+    """Display comprehensive detailed metrics."""
+    st.success("✅ Detailed analysis complete!")
+    
+    # Comprehensive metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Products", f"{metrics['total_products']:,}")
+        st.metric("Variants", f"{metrics['total_variants']:,}")
+    
+    with col2:
+        st.metric("Total Inventory", f"{metrics['total_inventory']:,}")
+        st.metric("Total Value", f"${metrics['total_value']:,.2f}")
+    
+    with col3:
+        st.metric("Low Stock", f"{metrics['low_stock_count']:,}")
+        st.metric("Out of Stock", f"{metrics['out_of_stock_count']:,}")
+    
+    with col4:
+        st.metric("Well Stocked", f"{metrics['well_stocked_count']:,}")
+        avg_value = metrics['total_value'] / metrics['total_variants'] if metrics['total_variants'] > 0 else 0
+        st.metric("Avg Value/Item", f"${avg_value:.2f}")
+    
+    # Product type breakdown
+    if metrics.get('product_types'):
         st.markdown("---")
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("📊 Quick Insights")
-            if metrics['estimated_variants'] > 0:
-                out_of_stock_pct = (metrics['estimated_out_of_stock'] / metrics['estimated_variants']) * 100
-                low_stock_pct = (metrics['estimated_low_stock'] / metrics['estimated_variants']) * 100
-                
-                st.write(f"**Out of Stock:** {out_of_stock_pct:.1f}% of variants")
-                st.write(f"**Low Stock:** {low_stock_pct:.1f}% of variants")
-                
-                if out_of_stock_pct > 20:
-                    st.warning("⚠️ High percentage of out-of-stock items!")
-                elif out_of_stock_pct > 10:
-                    st.info("💡 Consider restocking out-of-stock items")
-                else:
-                    st.success("✅ Good stock availability")
+            st.subheader("📊 Product Types")
+            types_df = pd.DataFrame(list(metrics['product_types'].items()), columns=['Type', 'Count'])
+            st.dataframe(types_df.head(10), use_container_width=True, hide_index=True)
         
         with col2:
-            st.subheader("⚡ Performance Tips")
-            st.markdown("""
-            - **Browse Products**: View paginated product list
-            - **Use Filters**: Filter by stock status to focus on issues  
-            - **Bulk Operations**: Update multiple products at once
-            - **Scheduled Sync**: Automate inventory updates
-            - **Cache Refresh**: Click refresh to update metrics
-            """)
-        
-        # Load and display critical alerts asynchronously
-        if st.button("🔍 Show Critical Alerts", help="Load detailed low stock and out of stock items"):
-            show_critical_alerts()
+            st.subheader("🏢 Top Vendors")
+            vendors_df = pd.DataFrame(list(metrics['vendors'].items()), columns=['Vendor', 'Count'])
+            st.dataframe(vendors_df.head(10), use_container_width=True, hide_index=True)
+
+def show_smart_critical_alerts():
+    """Show critical alerts with smart loading."""
+    st.subheader("⚠️ Critical Stock Alerts")
     
-    except Exception as e:
-        st.error(f"❌ Error loading dashboard: {str(e)}")
-        st.info("💡 Try refreshing the page or check your Shopify connection.")
+    # Load alerts with limits
+    with st.spinner("Loading critical alerts (limited to 100 items each)..."):
+        try:
+            # Limit critical alerts to prevent overload
+            low_stock_items = st.session_state.shopify_client.get_low_stock_products(threshold=5)[:100]
+            out_of_stock_items = st.session_state.shopify_client.get_out_of_stock_products()[:100]
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write(f"**⚠️ Low Stock Items** (showing first 100)")
+                if low_stock_items:
+                    df_low = pd.DataFrame(low_stock_items)
+                    st.dataframe(
+                        df_low[['title', 'sku', 'inventory_quantity', 'price']].head(50), 
+                        use_container_width=True, hide_index=True
+                    )
+                    if len(low_stock_items) == 100:
+                        st.info("💡 Showing first 100 items. Use 'Browse Products' with filters to see more.")
+                else:
+                    st.success("✅ No low stock items!")
+            
+            with col2:
+                st.write(f"**🚫 Out of Stock Items** (showing first 100)")
+                if out_of_stock_items:
+                    df_out = pd.DataFrame(out_of_stock_items)
+                    st.dataframe(
+                        df_out[['title', 'sku', 'price']].head(50), 
+                        use_container_width=True, hide_index=True
+                    )
+                    if len(out_of_stock_items) == 100:
+                        st.info("💡 Showing first 100 items. Use 'Browse Products' with filters to see more.")
+                else:
+                    st.success("✅ No out of stock items!")
+        
+        except Exception as e:
+            st.error(f"❌ Error loading alerts: {str(e)}")
+            st.info("💡 Try using the 'Browse Products' tab with stock filters instead.")
 
 def show_critical_alerts():
     """Show critical stock alerts with caching."""
@@ -281,41 +408,112 @@ def show_critical_alerts():
         st.error(f"❌ Error loading alerts: {str(e)}")
 
 def browse_products_tab():
-    """Browse and search products with pagination for better performance."""
+    """Browse and search products with smart loading for large catalogs."""
     st.header("🔍 Browse Products")
     
-    # Search and filter controls
-    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+    # Performance warning for large catalogs
+    try:
+        product_count = cache_manager.cached_call(
+            st.session_state.shopify_client.get_products_count,
+            "product_count",
+            ttl=300
+        )
+        
+        if product_count > 10000:
+            st.warning(f"⚠️ **Large Catalog Detected**: {product_count:,} products. Use filters to narrow results for better performance.")
+        elif product_count > 1000:
+            st.info(f"📊 **Medium Catalog**: {product_count:,} products. Pagination and filters recommended.")
+        
+    except:
+        product_count = 0
+    
+    # Advanced search and filter controls
+    with st.expander("🔍 **Search & Filter Controls**", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            search_term = st.text_input(
+                "🔍 Search Products", 
+                placeholder="Search by title, SKU, or product type...",
+                key="product_search",
+                help="Use specific terms for better performance"
+            )
+        
+        with col2:
+            stock_filter = st.selectbox(
+                "📦 Stock Status",
+                ["All", "In Stock", "Low Stock (≤5)", "Out of Stock"],
+                key="stock_filter",
+                help="Filter by stock level to reduce load"
+            )
+        
+        with col3:
+            product_type_filter = st.text_input(
+                "🏷️ Product Type",
+                placeholder="e.g., Electronics, Clothing...",
+                key="product_type_filter",
+                help="Filter by product type"
+            )
+    
+    # Load controls
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        search_term = st.text_input(
-            "🔍 Search Products", 
-            placeholder="Search by title, SKU, or product type...",
-            key="product_search"
+        st.session_state.products_per_page = st.selectbox(
+            "📄 Items per page",
+            [10, 25, 50, 100, 250],
+            index=1,  # Default to 25
+            key="items_per_page",
+            help="Larger pages = slower loading"
         )
     
     with col2:
-        stock_filter = st.selectbox(
-            "📦 Stock Status",
-            ["All", "In Stock", "Low Stock (≤5)", "Out of Stock"],
-            key="stock_filter"
+        view_mode = st.selectbox(
+            "👀 View Mode", 
+            ["Table", "Cards"], 
+            key="view_mode"
         )
     
     with col3:
-        st.session_state.products_per_page = st.selectbox(
-            "Items per page",
-            [10, 25, 50, 100],
-            index=1,  # Default to 25
-            key="items_per_page"
+        load_mode = st.selectbox(
+            "⚡ Load Mode",
+            ["Smart (Filtered)", "Force Load All"],
+            help="Smart mode applies filters server-side"
         )
     
     with col4:
-        view_mode = st.selectbox("View", ["Table", "Cards"], key="view_mode")
+        if st.button("🔄 Reset Filters"):
+            st.session_state.current_page = 1
+            for key in ['product_search', 'stock_filter', 'product_type_filter']:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
+    
+    # Search button and pagination reset
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        search_clicked = st.button("🔍 Search", type="primary")
+    
+    with col2:
+        # Show current filters
+        active_filters = []
+        if search_term:
+            active_filters.append(f"Search: '{search_term}'")
+        if stock_filter != "All":
+            active_filters.append(f"Stock: {stock_filter}")
+        if product_type_filter:
+            active_filters.append(f"Type: '{product_type_filter}'")
+        
+        if active_filters:
+            st.caption(f"**Active filters**: {' | '.join(active_filters)}")
+        else:
+            st.caption("**No filters applied** - showing all products")
     
     # Reset pagination when filters change
-    if st.button("🔍 Search", type="primary") or 'last_search' not in st.session_state or st.session_state.get('last_search') != (search_term, stock_filter):
+    current_filters = (search_term, stock_filter, product_type_filter)
+    if search_clicked or 'last_search' not in st.session_state or st.session_state.get('last_search') != current_filters:
         st.session_state.current_page = 1
-        st.session_state.last_search = (search_term, stock_filter)
+        st.session_state.last_search = current_filters
     
     try:
         # Load products with pagination and caching

@@ -874,6 +874,102 @@ class ShopifyClient:
             self.logger.error(f"Failed to get product count: {str(e)}")
             return 0
     
+    def get_quick_metrics_with_sample(self, sample_size: int = 50) -> Dict:
+        """
+        Get quick dashboard metrics with customizable sample size.
+        
+        Args:
+            sample_size: Number of products to sample
+            
+        Returns:
+            Dict: Quick metrics based on sample
+        """
+        try:
+            # Get basic counts
+            shop_info = self.get_shop_info()
+            product_count = self.get_products_count()
+            
+            # Get sample of products with customizable size
+            sample_products = self._get_paginated_results(
+                f'products.json?limit={min(sample_size, 250)}&fields=id,variants', 
+                'products', 
+                min(sample_size, 250)
+            )
+            
+            sample_variants = 0
+            sample_inventory = 0
+            sample_value = 0
+            low_stock_sample = 0
+            out_of_stock_sample = 0
+            
+            for product in sample_products:
+                for variant in product.get('variants', []):
+                    sample_variants += 1
+                    inventory_qty = variant.get('inventory_quantity', 0)
+                    price = float(variant.get('price', 0))
+                    
+                    sample_inventory += inventory_qty
+                    sample_value += inventory_qty * price
+                    
+                    if inventory_qty == 0:
+                        out_of_stock_sample += 1
+                    elif inventory_qty <= 5:
+                        low_stock_sample += 1
+            
+            # Estimate totals based on sample
+            if sample_variants > 0 and len(sample_products) > 0:
+                avg_variants_per_product = sample_variants / len(sample_products)
+                estimated_variants = int(product_count * avg_variants_per_product)
+                
+                avg_inventory_per_variant = sample_inventory / sample_variants if sample_variants > 0 else 0
+                estimated_inventory = int(estimated_variants * avg_inventory_per_variant)
+                
+                avg_value_per_variant = sample_value / sample_variants if sample_variants > 0 else 0
+                estimated_value = estimated_variants * avg_value_per_variant
+                
+                # Estimate stock status
+                low_stock_ratio = low_stock_sample / sample_variants if sample_variants > 0 else 0
+                out_of_stock_ratio = out_of_stock_sample / sample_variants if sample_variants > 0 else 0
+                
+                estimated_low_stock = int(estimated_variants * low_stock_ratio)
+                estimated_out_of_stock = int(estimated_variants * out_of_stock_ratio)
+            else:
+                estimated_variants = 0
+                estimated_inventory = 0
+                estimated_value = 0
+                estimated_low_stock = 0
+                estimated_out_of_stock = 0
+            
+            return {
+                'shop_name': shop_info.get('name', 'Your Store'),
+                'total_products': product_count,
+                'estimated_variants': estimated_variants,
+                'estimated_inventory': estimated_inventory,
+                'estimated_value': estimated_value,
+                'estimated_low_stock': estimated_low_stock,
+                'estimated_out_of_stock': estimated_out_of_stock,
+                'estimated_well_stocked': estimated_variants - estimated_low_stock - estimated_out_of_stock,
+                'sample_size': len(sample_products),
+                'sample_variants': sample_variants,
+                'is_estimate': True
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get quick metrics with sample: {str(e)}")
+            return {
+                'shop_name': 'Your Store',
+                'total_products': 0,
+                'estimated_variants': 0,
+                'estimated_inventory': 0,
+                'estimated_value': 0,
+                'estimated_low_stock': 0,
+                'estimated_out_of_stock': 0,
+                'estimated_well_stocked': 0,
+                'sample_size': 0,
+                'is_estimate': True,
+                'error': str(e)
+            }
+
     def get_quick_metrics(self) -> Dict:
         """
         Get quick dashboard metrics without loading all products.
