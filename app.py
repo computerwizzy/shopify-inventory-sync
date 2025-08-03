@@ -35,9 +35,49 @@ if 'matched_data' not in st.session_state:
     st.session_state.matched_data = None
 if 'shopify_client' not in st.session_state:
     try:
+        # Initialize config first to check what's available
+        config = Config()
+        
+        # Debug information
+        if config.debug_mode:
+            st.write("Debug: Config validation")
+            st.write(f"Store URL: {config.shopify_store_url}")
+            st.write(f"Has Access Token: {'Yes' if config.shopify_access_token else 'No'}")
+            st.write(f"API Version: {config.shopify_api_version}")
+        
+        # Check if configuration is missing
+        if not config.validate_shopify_config():
+            missing = config.get_missing_config()
+            st.error(f"⚠️ **Shopify Configuration Missing**")
+            st.error(f"Missing required settings: {', '.join(missing)}")
+            
+            st.markdown("### 🔧 How to Fix:")
+            st.markdown("**For Streamlit Cloud:**")
+            st.markdown("1. Go to your app settings")
+            st.markdown("2. Add these secrets:")
+            st.code("""[shopify]
+SHOP_NAME = "your-shop-name"
+ACCESS_TOKEN = "shpat_your_access_token"
+API_VERSION = "2025-01" """)
+            
+            st.markdown("**For Local Development:**")
+            st.markdown("Create a `.env` file with:")
+            st.code(config.create_env_template())
+            st.stop()
+        
         st.session_state.shopify_client = ShopifyClient()
+        
     except Exception as e:
         st.error(f"Failed to initialize Shopify Client: {e}")
+        
+        # Additional debug info
+        try:
+            config = Config()
+            st.write("**Debug Information:**")
+            st.write(config)
+        except Exception as debug_e:
+            st.write(f"Config debug failed: {debug_e}")
+        
         st.stop()
 
 def main():

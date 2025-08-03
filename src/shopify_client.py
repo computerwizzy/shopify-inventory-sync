@@ -14,11 +14,12 @@ from utils.api_resilience import (
     APIOverloadError,
     RateLimitError
 )
+from utils.config import Config
 
 class ShopifyClient:
     """Handles Shopify API integration for inventory management."""
     
-    def __init__(self, store_url: str = None, access_token: str = None, api_version: str = "2024-01"):
+    def __init__(self, store_url: str = None, access_token: str = None, api_version: str = None):
         """
         Initialize Shopify client.
         
@@ -27,9 +28,12 @@ class ShopifyClient:
             access_token: Shopify private app access token
             api_version: Shopify API version
         """
-        self.store_url = store_url or os.getenv('SHOPIFY_STORE_URL')
-        self.access_token = access_token or os.getenv('SHOPIFY_ACCESS_TOKEN')
-        self.api_version = api_version or os.getenv('SHOPIFY_API_VERSION', '2024-01')
+        # Use Config class to handle both environment variables and Streamlit secrets
+        config = Config()
+        
+        self.store_url = store_url or config.shopify_store_url
+        self.access_token = access_token or config.shopify_access_token
+        self.api_version = api_version or config.shopify_api_version
         
         if not self.store_url or not self.access_token:
             raise ValueError("Shopify store URL and access token are required")
