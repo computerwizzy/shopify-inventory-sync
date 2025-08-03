@@ -18,8 +18,8 @@ load_dotenv()
 
 # Configure page
 st.set_page_config(
-    page_title="Inventory Sync App",
-    page_icon="📦",
+    page_title="Shopify Inventory Manager",
+    page_icon="🏪",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -81,11 +81,100 @@ API_VERSION = "2025-01" """)
         st.stop()
 
 def main():
-    st.title("📦 Inventory Synchronization App")
+    # Header with store info
+    try:
+        shop_info = st.session_state.shopify_client.get_shop_info()
+        store_name = shop_info.get('name', 'Your Store')
+    except:
+        store_name = 'Your Store'
+    
+    st.title(f"🏪 {store_name} - Inventory Manager")
+    st.markdown("**Complete inventory management solution for Shopify**")
     st.markdown("---")
     
+    # Welcome section
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.subheader("👋 Welcome to your Inventory Management Hub")
+        st.markdown("""
+        This powerful tool helps you manage your Shopify store's inventory with:
+        - **Real-time product management** 📦
+        - **Automated inventory synchronization** 🔄
+        - **Bulk operations and updates** ⚡
+        - **Analytics and reporting** 📊
+        - **Low stock alerts** ⚠️
+        """)
+    
+    with col2:
+        # Quick stats if available
+        try:
+            products = st.session_state.shopify_client.get_all_products()
+            if products:
+                total_products = len(products)
+                total_variants = sum(len(p.get('variants', [])) for p in products)
+                
+                st.metric("Products", total_products)
+                st.metric("Variants", total_variants)
+        except:
+            st.info("Loading store data...")
+    
+    st.markdown("---")
+    
+    # Quick action cards
+    st.subheader("🚀 Quick Actions")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        with st.container():
+            st.markdown("### 📦 Product Management")
+            st.markdown("Browse, search, and edit your products and inventory")
+            if st.button("🔍 Browse Products", type="primary", use_container_width=True):
+                st.switch_page("pages/4_📦_Product_Management.py")
+    
+    with col2:
+        with st.container():
+            st.markdown("### 🔗 Feed Sources")
+            st.markdown("Configure automated data feeds from suppliers")
+            if st.button("⚙️ Configure Feeds", type="secondary", use_container_width=True):
+                st.switch_page("pages/1_🔗_Feed_Sources.py")
+    
+    with col3:
+        with st.container():
+            st.markdown("### ⏰ Scheduled Sync")
+            st.markdown("Set up automated inventory synchronization")
+            if st.button("📅 Schedule Sync", type="secondary", use_container_width=True):
+                st.switch_page("pages/2_⏰_Scheduled_Sync.py")
+    
+    with col4:
+        with st.container():
+            st.markdown("### 📊 API Monitor")
+            st.markdown("Monitor API usage and performance")
+            if st.button("📈 View Monitor", type="secondary", use_container_width=True):
+                st.switch_page("pages/3_📊_API_Monitor.py")
+    
+    st.markdown("---")
+    
+    # Manual upload section for quick sync
+    st.subheader("📤 Quick File Upload & Sync")
+    st.markdown("Upload an inventory file for immediate synchronization")
+    
+    mode = st.radio(
+        "Choose operation mode:",
+        ["🔄 Quick Sync (Guided)", "⚡ Expert Mode (Direct Upload)"],
+        horizontal=True
+    )
+    
+    if mode == "🔄 Quick Sync (Guided)":
+        show_guided_sync()
+    else:
+        show_expert_sync()
+
+def show_guided_sync():
+    """Show guided sync interface."""
     # Sidebar navigation
-    st.sidebar.title("Navigation")
+    st.sidebar.title("🔄 Quick Sync Steps")
     steps = [
         "1. Upload File",
         "2. Map Columns", 
@@ -96,6 +185,10 @@ def main():
     current_step = st.sidebar.radio("Current Step", steps, index=st.session_state.step-1)
     st.session_state.step = steps.index(current_step) + 1
     
+    # Progress bar
+    progress = st.session_state.step / len(steps)
+    st.progress(progress, text=f"Step {st.session_state.step} of {len(steps)}")
+    
     # Main content based on step
     if st.session_state.step == 1:
         upload_file_step()
@@ -105,6 +198,61 @@ def main():
         match_skus_step()
     elif st.session_state.step == 4:
         sync_inventory_step()
+
+def show_expert_sync():
+    """Show expert mode for quick uploads."""
+    st.info("💡 **Expert Mode**: For experienced users who want to quickly upload and sync without guided steps.")
+    
+    uploaded_file = st.file_uploader(
+        "Upload Inventory File", 
+        type=['csv', 'xlsx', 'xls'],
+        help="File should contain SKU and Quantity columns"
+    )
+    
+    if uploaded_file is not None:
+        try:
+            processor = FileProcessor()
+            df = processor.process_file(uploaded_file)
+            
+            st.success(f"✅ File loaded: {len(df)} rows, {len(df.columns)} columns")
+            
+            # Quick column mapping
+            col1, col2 = st.columns(2)
+            with col1:
+                sku_col = st.selectbox("SKU Column", df.columns)
+            with col2:
+                qty_col = st.selectbox("Quantity Column", df.columns)
+            
+            if st.button("⚡ Quick Sync", type="primary"):
+                with st.spinner("Performing quick sync..."):
+                    # Quick mapping and sync
+                    mapping = {"SKU": sku_col, "Quantity": qty_col}
+                    mapper = ColumnMapper(df.columns.tolist())
+                    mapped_df = mapper.get_mapped_data(df, mapping)
+                    
+                    if not mapped_df.empty:
+                        # Quick SKU matching and sync
+                        matcher = SKUMatcher(st.session_state.shopify_client)
+                        matches = matcher.find_sku_matches(mapped_df['SKU'].tolist())
+                        
+                        sync_data = []
+                        for _, row in mapped_df.iterrows():
+                            if row['SKU'] in matches:
+                                sync_data.append({
+                                    'variant_id': matches[row['SKU']]['variant_id'],
+                                    'new_quantity': int(row['Quantity'])
+                                })
+                        
+                        if sync_data:
+                            results = st.session_state.shopify_client.bulk_update_inventory(sync_data)
+                            success_count = sum(1 for r in results if r.get('success', False))
+                            st.success(f"✅ Quick sync complete! Updated {success_count} of {len(sync_data)} items.")
+                        else:
+                            st.warning("⚠️ No matching SKUs found in your store.")
+                    else:
+                        st.error("❌ Failed to map columns.")
+        except Exception as e:
+            st.error(f"❌ Error processing file: {str(e)}")
 
 def upload_file_step():
     st.header("📁 Step 1: Upload Your Inventory File")

@@ -574,3 +574,287 @@ class ShopifyClient:
     def close(self):
         """Close any resources."""
         pass
+    
+    def search_products(self, query: str = None, limit: int = 250, 
+                       product_type: str = None, vendor: str = None) -> List[Dict]:
+        """
+        Search products with filters.
+        
+        Args:
+            query: Search query for title
+            limit: Maximum number of products to return
+            product_type: Filter by product type
+            vendor: Filter by vendor
+            
+        Returns:
+            List[Dict]: Filtered products
+        """
+        params = {
+            'limit': min(limit, 250),
+            'fields': 'id,title,handle,variants,product_type,vendor,tags,created_at,updated_at'
+        }
+        
+        if query:
+            params['title'] = query
+        if product_type:
+            params['product_type'] = product_type
+        if vendor:
+            params['vendor'] = vendor
+        
+        return self._get_paginated_results('products.json', 'products', limit)
+    
+    def get_product_by_id(self, product_id: int) -> Dict:
+        """
+        Get a specific product by ID.
+        
+        Args:
+            product_id: Shopify product ID
+            
+        Returns:
+            Dict: Product data
+        """
+        response = self._make_request('GET', f'products/{product_id}.json')
+        return response.get('product', {})
+    
+    def create_product(self, product_data: Dict) -> Dict:
+        """
+        Create a new product.
+        
+        Args:
+            product_data: Product data dictionary
+            
+        Returns:
+            Dict: Created product data
+        """
+        json_data = {'product': product_data}
+        response = self._make_request('POST', 'products.json', json_data=json_data)
+        return response.get('product', {})
+    
+    def update_product(self, product_id: int, product_data: Dict) -> Dict:
+        """
+        Update an existing product.
+        
+        Args:
+            product_id: Shopify product ID
+            product_data: Updated product data
+            
+        Returns:
+            Dict: Updated product data
+        """
+        json_data = {'product': product_data}
+        response = self._make_request('PUT', f'products/{product_id}.json', json_data=json_data)
+        return response.get('product', {})
+    
+    def delete_product(self, product_id: int) -> bool:
+        """
+        Delete a product.
+        
+        Args:
+            product_id: Shopify product ID
+            
+        Returns:
+            bool: True if successful
+        """
+        try:
+            self._make_request('DELETE', f'products/{product_id}.json')
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to delete product {product_id}: {str(e)}")
+            return False
+    
+    def update_variant_inventory(self, variant_id: int, quantity: int, location_id: int = None) -> bool:
+        """
+        Update inventory for a specific variant.
+        
+        Args:
+            variant_id: Shopify variant ID
+            quantity: New inventory quantity
+            location_id: Location ID (optional)
+            
+        Returns:
+            bool: True if successful
+        """
+        try:
+            if not location_id:
+                location_id = self._get_primary_location_id()
+            
+            # Get current inventory item
+            inventory_response = self._make_request('GET', f'variants/{variant_id}.json')
+            variant = inventory_response.get('variant', {})
+            inventory_item_id = variant.get('inventory_item_id')
+            
+            if not inventory_item_id:
+                self.logger.error(f"No inventory item found for variant {variant_id}")
+                return False
+            
+            # Update inventory level
+            json_data = {
+                'location_id': location_id,
+                'inventory_item_id': inventory_item_id,
+                'available': quantity
+            }
+            
+            self._make_request('POST', 'inventory_levels/set.json', json_data=json_data)
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to update inventory for variant {variant_id}: {str(e)}")
+            return False
+    
+    def get_inventory_levels(self, location_id: int = None) -> List[Dict]:
+        """
+        Get inventory levels for a location.
+        
+        Args:
+            location_id: Location ID (optional)
+            
+        Returns:
+            List[Dict]: Inventory levels
+        """
+        if not location_id:
+            location_id = self._get_primary_location_id()
+        
+        params = {'location_ids': location_id, 'limit': 250}
+        return self._get_paginated_results('inventory_levels.json', 'inventory_levels', 250)
+    
+    def get_low_stock_products(self, threshold: int = 5) -> List[Dict]:
+        """
+        Get products with low stock.
+        
+        Args:
+            threshold: Stock level threshold
+            
+        Returns:
+            List[Dict]: Products with low stock
+        """
+        products = self.get_all_products()
+        low_stock = []
+        
+        for product in products:
+            for variant in product.get('variants', []):
+                inventory_qty = variant.get('inventory_quantity', 0)
+                if 0 < inventory_qty <= threshold:
+                    low_stock.append({
+                        'product_id': product['id'],
+                        'variant_id': variant['id'],
+                        'title': product['title'],
+                        'variant_title': variant.get('title', ''),
+                        'sku': variant.get('sku', ''),
+                        'inventory_quantity': inventory_qty,
+                        'price': variant.get('price', 0)
+                    })
+        
+        return low_stock
+    
+    def get_out_of_stock_products(self) -> List[Dict]:
+        """
+        Get products that are out of stock.
+        
+        Returns:
+            List[Dict]: Out of stock products
+        """
+        products = self.get_all_products()
+        out_of_stock = []
+        
+        for product in products:
+            for variant in product.get('variants', []):
+                inventory_qty = variant.get('inventory_quantity', 0)
+                if inventory_qty == 0:
+                    out_of_stock.append({
+                        'product_id': product['id'],
+                        'variant_id': variant['id'],
+                        'title': product['title'],
+                        'variant_title': variant.get('title', ''),
+                        'sku': variant.get('sku', ''),
+                        'price': variant.get('price', 0)
+                    })
+        
+        return out_of_stock
+    
+    def bulk_price_update(self, updates: List[Dict]) -> List[Dict]:
+        """
+        Update prices for multiple variants.
+        
+        Args:
+            updates: List of {variant_id, price} dictionaries
+            
+        Returns:
+            List[Dict]: Update results
+        """
+        results = []
+        
+        for update in updates:
+            try:
+                variant_id = update['variant_id']
+                new_price = update['price']
+                
+                json_data = {'variant': {'price': str(new_price)}}
+                response = self._make_request('PUT', f'variants/{variant_id}.json', json_data=json_data)
+                
+                results.append({
+                    'variant_id': variant_id,
+                    'success': True,
+                    'updated_price': new_price
+                })
+                
+            except Exception as e:
+                results.append({
+                    'variant_id': update.get('variant_id'),
+                    'success': False,
+                    'error': str(e)
+                })
+        
+        return results
+    
+    def get_product_analytics(self) -> Dict:
+        """
+        Get basic product analytics.
+        
+        Returns:
+            Dict: Analytics data
+        """
+        products = self.get_all_products()
+        
+        if not products:
+            return {}
+        
+        total_products = len(products)
+        total_variants = 0
+        total_inventory = 0
+        total_value = 0
+        out_of_stock_count = 0
+        low_stock_count = 0
+        product_types = {}
+        vendors = {}
+        
+        for product in products:
+            product_type = product.get('product_type', 'Unknown')
+            vendor = product.get('vendor', 'Unknown')
+            
+            product_types[product_type] = product_types.get(product_type, 0) + 1
+            vendors[vendor] = vendors.get(vendor, 0) + 1
+            
+            for variant in product.get('variants', []):
+                total_variants += 1
+                inventory_qty = variant.get('inventory_quantity', 0)
+                price = float(variant.get('price', 0))
+                
+                total_inventory += inventory_qty
+                total_value += inventory_qty * price
+                
+                if inventory_qty == 0:
+                    out_of_stock_count += 1
+                elif inventory_qty <= 5:
+                    low_stock_count += 1
+        
+        return {
+            'total_products': total_products,
+            'total_variants': total_variants,
+            'total_inventory': total_inventory,
+            'total_value': total_value,
+            'out_of_stock_count': out_of_stock_count,
+            'low_stock_count': low_stock_count,
+            'well_stocked_count': total_variants - out_of_stock_count - low_stock_count,
+            'product_types': dict(sorted(product_types.items(), key=lambda x: x[1], reverse=True)),
+            'vendors': dict(sorted(vendors.items(), key=lambda x: x[1], reverse=True))
+        }
