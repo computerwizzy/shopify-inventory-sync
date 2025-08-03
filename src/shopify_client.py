@@ -145,6 +145,60 @@ class ShopifyClient:
         
         raise Exception("Maximum retry attempts exceeded")
     
+    def _get_paginated_results(self, endpoint: str, data_key: str, limit: int = 250) -> List[Dict]:
+        """
+        Get all results from a paginated Shopify API endpoint.
+        
+        Args:
+            endpoint: API endpoint (e.g., 'products.json')
+            data_key: Key in response containing the data array
+            limit: Number of items per page (max 250)
+            
+        Returns:
+            List[Dict]: All results from all pages
+        """
+        all_results = []
+        params = {'limit': limit}
+        
+        while True:
+            try:
+                response = self._make_request('GET', endpoint, params=params)
+                
+                if data_key not in response:
+                    self.logger.warning(f"No '{data_key}' key found in response for {endpoint}")
+                    break
+                
+                items = response[data_key]
+                if not items:
+                    # No more items
+                    break
+                
+                all_results.extend(items)
+                self.logger.info(f"Retrieved {len(items)} items from {endpoint} (total: {len(all_results)})")
+                
+                # Check for pagination info
+                # Shopify uses 'Link' header for pagination in newer APIs
+                if len(items) < limit:
+                    # Got fewer items than requested, probably last page
+                    break
+                
+                # For older pagination, use the last item's ID as since_id
+                if items:
+                    last_id = items[-1].get('id')
+                    if last_id:
+                        params['since_id'] = last_id
+                    else:
+                        # No ID found, can't paginate further
+                        break
+                else:
+                    break
+                    
+            except Exception as e:
+                self.logger.error(f"Error fetching paginated results from {endpoint}: {str(e)}")
+                break
+        
+        return all_results
+    
     def test_connection(self) -> bool:
         """
         Test connection to Shopify API.
@@ -170,21 +224,22 @@ class ShopifyClient:
     
     def get_all_collections(self) -> List[Dict]:
         """
-        Get all smart and custom collections from Shopify store.
+        Get all smart and custom collections from Shopify store with pagination.
         
         Returns:
             List[Dict]: All collections
         """
         all_collections = []
         
-        # Get smart collections
-        smart_collections_response = self._make_request('GET', 'smart_collections.json')
-        all_collections.extend(smart_collections_response.get('smart_collections', []))
+        # Get smart collections with pagination
+        smart_collections = self._get_paginated_results('smart_collections.json', 'smart_collections')
+        all_collections.extend(smart_collections)
         
-        # Get custom collections
-        custom_collections_response = self._make_request('GET', 'custom_collections.json')
-        all_collections.extend(custom_collections_response.get('custom_collections', []))
+        # Get custom collections with pagination
+        custom_collections = self._get_paginated_results('custom_collections.json', 'custom_collections')
+        all_collections.extend(custom_collections)
         
+        self.logger.info(f"Retrieved {len(all_collections)} total collections from Shopify")
         return all_collections
 
     def get_products_by_collection(self, collection_ids: List[int], limit: int = 250) -> List[Dict]:
@@ -223,7 +278,7 @@ class ShopifyClient:
 
     def get_all_products(self, limit: int = 250) -> List[Dict]:
         """
-        Get all products from Shopify store.
+        Get all products from Shopify store with pagination.
         
         Args:
             limit: Number of products per page (max 250)
@@ -231,25 +286,10 @@ class ShopifyClient:
         Returns:
             List[Dict]: All products with variants
         """
-        all_products = []
-        params = {
-            'limit': min(limit, 250),
-            'fields': 'id,title,handle,variants'
-        }
+        # Use the paginated helper with custom fields
+        all_products = self._get_paginated_results('products.json?fields=id,title,handle,variants', 'products', limit)
         
-        # Get first page
-        response = self._make_request('GET', 'products.json', params=params)
-        products = response.get('products', [])
-        all_products.extend(products)
-        
-        # Get remaining pages using pagination
-        while len(products) == params['limit']:
-            # Get next page using the last product's ID
-            params['since_id'] = products[-1]['id']
-            response = self._make_request('GET', 'products.json', params=params)
-            products = response.get('products', [])
-            all_products.extend(products)
-        
+        self.logger.info(f"Retrieved {len(all_products)} total products from Shopify")
         return all_products
     
     def get_product_variants(self, product_id: int) -> List[Dict]:
